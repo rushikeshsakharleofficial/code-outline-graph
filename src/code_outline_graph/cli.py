@@ -3,24 +3,26 @@ import json
 import os
 import sys
 
+from .paths import ensure_project_db_path, resolve_project_path
 
-DEFAULT_DB = os.path.expanduser("~/.code-outline-graph/index.db")
 
-
-def _get_db_indexer():
+def _get_db_indexer(project_path: str | None = None):
     from .db import Database
     from .indexer import Indexer
-    os.makedirs(os.path.dirname(DEFAULT_DB), exist_ok=True)
-    db = Database(DEFAULT_DB)
-    return db, Indexer(db)
+
+    resolved_project = resolve_project_path(project_path)
+    db_path = ensure_project_db_path(resolved_project)
+    db = Database(db_path)
+    return db, Indexer(db), db_path
 
 
 def cmd_build(args):
-    path = os.path.abspath(args.path or ".")
+    path = resolve_project_path(args.path or ".")
     print(f"Indexing {path}...")
-    db, indexer = _get_db_indexer()
+    _db, indexer, db_path = _get_db_indexer(path)
     stats = indexer.index_project(path)
     print(f"Done: {stats['files']} files, {stats['symbols']} symbols, {stats['skipped']} skipped")
+    print(f"DB: {db_path}")
 
     # Auto-add to .mcp.json in the project root
     mcp_path = os.path.join(path, ".mcp.json")
@@ -34,7 +36,7 @@ def cmd_build(args):
         config.setdefault("mcpServers", {})
         config["mcpServers"]["code-outline"] = {
             "command": "code-outline-graph",
-            "args": ["serve"]
+            "args": ["serve", path]
         }
 
         with open(mcp_path, "w") as f:
@@ -45,9 +47,9 @@ def cmd_build(args):
 
 
 def cmd_update(args):
-    path = os.path.abspath(args.path or ".")
+    path = resolve_project_path(args.path or ".")
     print(f"Updating index for {path}...")
-    db, indexer = _get_db_indexer()
+    db, indexer, _db_path = _get_db_indexer(path)
     from .parser import detect_language
     from .indexer import compute_checksum
     updated = 0
@@ -75,7 +77,7 @@ def cmd_update(args):
 
 def cmd_search(args):
     from .search import Searcher
-    db, _ = _get_db_indexer()
+    db, _indexer, _db_path = _get_db_indexer(args.project)
     results = Searcher(db).keyword_search(args.query, limit=20)
     if not results:
         print("No results.")
@@ -89,7 +91,7 @@ def cmd_search(args):
 
 def cmd_outline(args):
     file_path = os.path.abspath(args.file)
-    db, indexer = _get_db_indexer()
+    db, indexer, _db_path = _get_db_indexer(args.project)
     indexer.ensure_fresh(file_path)
     symbols = db.get_symbols_by_file(file_path)
     if not symbols:
@@ -110,14 +112,15 @@ def cmd_outline(args):
 
 
 def cmd_status(args):
-    path = os.path.abspath(args.path or ".")
-    db, _ = _get_db_indexer()
+    path = resolve_project_path(args.path or ".")
+    db, _indexer, db_path = _get_db_indexer(path)
     row = db.conn.execute("SELECT COUNT(*) FROM indexed_files").fetchone()
     files = row[0] if row else 0
     row2 = db.conn.execute("SELECT COUNT(*) FROM symbols").fetchone()
     symbols = row2[0] if row2 else 0
     print(f"Index: {files} files, {symbols} symbols")
-    print(f"DB: {DEFAULT_DB}")
+    print(f"Project: {path}")
+    print(f"DB: {db_path}")
 
 
 def cmd_serve(_args):
@@ -125,7 +128,9 @@ def cmd_serve(_args):
 
     async def _run():
         from mcp.server.stdio import stdio_server
-        from .server import app
+        from .server import app, configure_project
+
+        configure_project(getattr(_args, "project", "."))
         async with stdio_server() as (r, w):
             await app.run(r, w, app.create_initialization_options())
 
@@ -146,15 +151,18 @@ def main():
     p_update.add_argument("path", nargs="?", default=".", help="Project path (default: cwd)")
 
     p_search = sub.add_parser("search", help="Search symbols by keyword")
+    p_search.add_argument("--project", default=".", help="Project path (default: cwd)")
     p_search.add_argument("query", help="Search query")
 
     p_outline = sub.add_parser("outline", help="List symbols in a file")
+    p_outline.add_argument("--project", default=".", help="Project path (default: cwd)")
     p_outline.add_argument("file", help="File path")
 
     p_status = sub.add_parser("status", help="Show index stats")
     p_status.add_argument("path", nargs="?", default=".", help="Project path")
 
-    sub.add_parser("serve", help="Start MCP server (stdio)")
+    p_serve = sub.add_parser("serve", help="Start MCP server (stdio)")
+    p_serve.add_argument("project", nargs="?", default=".", help="Project path (default: cwd)")
 
     args = parser.parse_args()
 

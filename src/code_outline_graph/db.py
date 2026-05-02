@@ -7,6 +7,14 @@ from typing import Optional
 import sqlite_vec
 
 
+def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
+    conn.enable_load_extension(True)
+    try:
+        sqlite_vec.load(conn)
+    finally:
+        conn.enable_load_extension(False)
+
+
 @dataclass
 class Symbol:
     name: str
@@ -27,7 +35,7 @@ class Database:
     def __init__(self, path: str) -> None:
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        sqlite_vec.load(self.conn)
+        _load_sqlite_vec(self.conn)
         self._create_schema()
 
     def _create_schema(self) -> None:

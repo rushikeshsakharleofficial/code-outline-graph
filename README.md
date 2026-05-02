@@ -47,10 +47,11 @@ Output:
 ```
 Indexing /your/project...
 Done: 186 files, 1789 symbols, 5 skipped
+DB: /your/project/.code-outline-graph/index.db
 MCP config written to /your/project/.mcp.json
 ```
 
-This creates `.mcp.json` in your project automatically.
+This stores the index in `/your/project/.code-outline-graph/index.db` and creates `.mcp.json` in your project automatically.
 
 ### 2. Add to Claude Code (global)
 
@@ -60,7 +61,7 @@ Edit `~/.claude/claude.json`:
   "mcpServers": {
     "code-outline": {
       "command": "code-outline-graph",
-      "args": ["serve"]
+      "args": ["serve", "/your/project"]
     }
   }
 }
@@ -75,7 +76,7 @@ Settings → MCP → Add server:
 {
   "code-outline": {
     "command": "code-outline-graph",
-    "args": ["serve"]
+    "args": ["serve", "/your/project"]
   }
 }
 ```
@@ -112,16 +113,16 @@ code-outline-graph build [path]
 code-outline-graph update [path]
 
 # Search symbols from terminal
-code-outline-graph search <query>
+code-outline-graph search --project [path] <query>
 
 # List all symbols in a file
-code-outline-graph outline <file>
+code-outline-graph outline --project [path] <file>
 
 # Show index stats
-code-outline-graph status
+code-outline-graph status [path]
 
 # Start MCP server manually (stdio)
-code-outline-graph serve
+code-outline-graph serve [path]
 ```
 
 ---
@@ -159,6 +160,7 @@ Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, C#, Ruby, PHP, Swift, Ko
 |---------|--------|
 | Zero telemetry | No external calls, fully local |
 | No file cap | Indexes any size project |
+| Project-local index | Stores SQLite data in `[project]/.code-outline-graph/index.db` |
 | Always fresh | Every read checks blake2b checksum, reindexes if stale |
 | Watcher on by default | 500ms debounce, git-HEAD-aware (detects `git pull`) |
 | No daemon | Single process, no background service |

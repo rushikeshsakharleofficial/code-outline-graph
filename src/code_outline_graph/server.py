@@ -4,6 +4,7 @@ from mcp.server import Server
 from mcp import types
 from .db import Database
 from .indexer import Indexer
+from .paths import ensure_project_db_path, resolve_project_path
 from .search import Searcher
 from .watcher import CodeWatcher
 
@@ -11,17 +12,25 @@ _db: Database | None = None
 _indexer: Indexer | None = None
 _searcher: Searcher | None = None
 _watcher: CodeWatcher | None = None
+_configured_project_path: str | None = None
+_active_project_path: str | None = None
 
-DEFAULT_DB = os.path.expanduser("~/.code-outline-graph/index.db")
+
+def configure_project(project_path: str | None = None) -> None:
+    global _configured_project_path
+    _configured_project_path = resolve_project_path(project_path)
 
 
-def _get_components():
-    global _db, _indexer, _searcher
-    if _db is None:
-        os.makedirs(os.path.dirname(DEFAULT_DB), exist_ok=True)
-        _db = Database(DEFAULT_DB)
+def _get_components(project_path: str | None = None):
+    global _db, _indexer, _searcher, _active_project_path
+    resolved_project = resolve_project_path(project_path or _configured_project_path)
+    if _db is None or _active_project_path != resolved_project:
+        if _db is not None:
+            _db.conn.close()
+        _db = Database(ensure_project_db_path(resolved_project))
         _indexer = Indexer(_db)
         _searcher = Searcher(_db)
+        _active_project_path = resolved_project
     return _db, _indexer, _searcher
 
 
@@ -61,19 +70,22 @@ async def list_tools():
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict):
-    db, indexer, searcher = _get_components()
-
     if name == "index_project":
-        path = os.path.expanduser(arguments["path"])
-        global _watcher
-        stats = indexer.index_project(path)
+        global _watcher, _configured_project_path
+        path = resolve_project_path(arguments["path"])
+        _configured_project_path = path
         if _watcher:
             _watcher.stop()
+            _watcher = None
+        db, indexer, searcher = _get_components(path)
+        stats = indexer.index_project(path)
         _watcher = CodeWatcher(indexer, path)
         _watcher.start()
         return [types.TextContent(type="text", text=json.dumps(stats))]
 
-    elif name == "list_outline":
+    db, indexer, searcher = _get_components()
+
+    if name == "list_outline":
         file_path = os.path.expanduser(arguments["file"])
         indexer.ensure_fresh(file_path)
         symbols = db.get_symbols_by_file(file_path)
