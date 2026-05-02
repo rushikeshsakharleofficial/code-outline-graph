@@ -53,6 +53,9 @@ async def list_tools():
             inputSchema={"type":"object","properties":{"file":{"type":"string"},"start":{"type":"integer"},"end":{"type":"integer"}},"required":["file","start","end"]}),
         types.Tool(name="get_outline_summary", description="Signatures only, ultra-compressed outline",
             inputSchema={"type":"object","properties":{"file":{"type":"string"}},"required":["file"]}),
+        types.Tool(name="get_file_header",
+            description="Get file header: shebang, imports, module docstring, top-level constants",
+            inputSchema={"type":"object","properties":{"file":{"type":"string"}},"required":["file"]}),
     ]
 
 
@@ -119,6 +122,19 @@ async def call_tool(name: str, arguments: dict):
         symbols = db.get_symbols_by_file(file_path)
         lines = [f"{s.start_line}-{s.end_line} [{s.kind}] {s.signature or s.name}" for s in symbols]
         return [types.TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "get_file_header":
+        file_path = os.path.expanduser(arguments["file"])
+        indexer.ensure_fresh(file_path)
+        symbols = db.get_symbols_by_file(file_path)
+        header_syms = [s for s in symbols if s.kind in ("import", "variable") and s.start_line < 50]
+        if not header_syms:
+            # fallback: return first 20 lines
+            body = _read_lines(file_path, 1, 20)
+        else:
+            last_line = max(s.end_line for s in header_syms)
+            body = _read_lines(file_path, 1, last_line)
+        return [types.TextContent(type="text", text=body)]
 
     return [types.TextContent(type="text", text=json.dumps({"error":"unknown_tool","tool":name}))]
 

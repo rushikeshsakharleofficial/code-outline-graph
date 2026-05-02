@@ -122,6 +122,17 @@ class SymbolExtractor:
                 return "method" if self._has_class_parent(node) else "function"
             if t == "class_definition":
                 return "class"
+            if t in ("import_statement", "import_from_statement"):
+                return "import"
+            if t == "assignment" and node.parent and node.parent.type == "module":
+                # module-level assignment → variable
+                return "variable"
+            if t == "expression_statement" and node.parent and node.parent.type == "module":
+                # some tree-sitter versions wrap assignments in expression_statement
+                for child in node.children:
+                    if child.type == "assignment":
+                        return "variable"
+                return None
 
         elif lang in ("javascript", "typescript", "tsx"):
             if t == "function_declaration":
@@ -131,6 +142,18 @@ class SymbolExtractor:
                 for child in node.children:
                     if child.type in ("arrow_function", "function_expression"):
                         return "function"
+                # plain variable_declarator — parent lexical_declaration handles this
+                return None
+            if t == "lexical_declaration" and node.parent and node.parent.type in ("program", "module"):
+                # only emit "variable" if no child declarator is a function (avoid double-counting)
+                for child in node.children:
+                    if child.type == "variable_declarator":
+                        for grandchild in child.children:
+                            if grandchild.type in ("arrow_function", "function_expression"):
+                                return None  # let variable_declarator emit "function"
+                return "variable"
+            if t == "import_declaration":
+                return "import"
             if t == "class_declaration":
                 return "class"
             if t == "method_definition":
@@ -169,15 +192,54 @@ class SymbolExtractor:
 
     def _get_name(self, node) -> Optional[str]:
         """Return the text of the first child node with type 'identifier'."""
-        # JS/TS: variable_declarator — name is the identifier child
-        if node.type == "variable_declarator":
+        t = node.type
+
+        # Imports: use the full first line as the name (up to 80 chars)
+        if t in ("import_statement", "import_from_statement", "import_declaration"):
+            return node.text.decode("utf-8", errors="replace").split("\n")[0].strip()[:80]
+
+        # Python module-level variable: direct assignment node at module level
+        if t == "assignment":
+            lhs = node.child_by_field_name("left")
+            if lhs is not None:
+                return lhs.text.decode("utf-8", errors="replace").strip()
+            # fallback: first identifier child
             for child in node.children:
                 if child.type == "identifier":
                     return child.text.decode("utf-8", errors="replace")
             return None
 
+        # Python module-level variable: expression_statement → assignment (older tree-sitter)
+        if t == "expression_statement":
+            for child in node.children:
+                if child.type == "assignment":
+                    lhs = child.child_by_field_name("left")
+                    if lhs is not None:
+                        return lhs.text.decode("utf-8", errors="replace").strip()
+                    # fallback: first identifier child of assignment
+                    for gc in child.children:
+                        if gc.type == "identifier":
+                            return gc.text.decode("utf-8", errors="replace")
+            return None
+
+        # JS/TS: variable_declarator — name is the identifier child
+        if t == "variable_declarator":
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # JS/TS: lexical_declaration (top-level const/let) — name from first variable_declarator
+        if t == "lexical_declaration":
+            for child in node.children:
+                if child.type == "variable_declarator":
+                    for gc in child.children:
+                        if gc.type == "identifier":
+                            return gc.text.decode("utf-8", errors="replace")
+            return None
+
         # Go: name is in type_spec grandchild
-        if node.type == "type_declaration":
+        if t == "type_declaration":
             for child in node.children:
                 if child.type == "type_spec":
                     name_node = child.child_by_field_name("name")

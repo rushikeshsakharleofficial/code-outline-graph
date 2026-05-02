@@ -95,7 +95,16 @@ def cmd_outline(args):
     if not symbols:
         print("No symbols found (file not indexed or no supported symbols).")
         return
-    for s in symbols:
+    # Show imports and module-level variables first, then the rest
+    header_kinds = ("import", "variable")
+    header = [s for s in symbols if s.kind in header_kinds]
+    body = [s for s in symbols if s.kind not in header_kinds]
+    if header:
+        print("--- imports / module-level ---")
+        for s in header:
+            print(f"{s.start_line}-{s.end_line}  [{s.kind}] {s.signature or s.name}")
+        print()
+    for s in body:
         indent = "  " if s.parent_name else ""
         print(f"{indent}{s.start_line}-{s.end_line}  [{s.kind}] {s.signature or s.name}")
 
