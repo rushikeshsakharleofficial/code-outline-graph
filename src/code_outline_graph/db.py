@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -24,7 +25,7 @@ class Symbol:
 
 class Database:
     def __init__(self, path: str) -> None:
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         sqlite_vec.load(self.conn)
         self._create_schema()
@@ -68,6 +69,23 @@ class Database:
                 language      TEXT,
                 indexed_at    INTEGER NOT NULL
             );
+
+            CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
+              INSERT INTO symbols_fts(rowid, name, kind, file_path, signature, docstring)
+              VALUES (new.id, new.name, new.kind, new.file_path, new.signature, new.docstring);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
+              INSERT INTO symbols_fts(symbols_fts, rowid, name, kind, file_path, signature, docstring)
+              VALUES ('delete', old.id, old.name, old.kind, old.file_path, old.signature, old.docstring);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
+              INSERT INTO symbols_fts(symbols_fts, rowid, name, kind, file_path, signature, docstring)
+              VALUES ('delete', old.id, old.name, old.kind, old.file_path, old.signature, old.docstring);
+              INSERT INTO symbols_fts(rowid, name, kind, file_path, signature, docstring)
+              VALUES (new.id, new.name, new.kind, new.file_path, new.signature, new.docstring);
+            END;
         """)
         self.conn.commit()
 
@@ -80,6 +98,12 @@ class Database:
     ) -> None:
         now = int(time.time())
         with self.conn:
+            # delete vec_symbols first (foreign key order)
+            ids = [row[0] for row in self.conn.execute("SELECT id FROM symbols WHERE file_path=?", (file_path,)).fetchall()]
+            if ids:
+                placeholders = ",".join("?" * len(ids))
+                self.conn.execute(f"DELETE FROM vec_symbols WHERE symbol_id IN ({placeholders})", ids)
+            self.conn.execute("DELETE FROM symbols WHERE file_path=?", (file_path,))
             for sym in symbols:
                 self.conn.execute(
                     """

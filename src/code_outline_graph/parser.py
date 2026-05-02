@@ -124,8 +124,13 @@ class SymbolExtractor:
                 return "class"
 
         elif lang in ("javascript", "typescript", "tsx"):
-            if t in ("function_declaration", "arrow_function", "function_expression"):
+            if t == "function_declaration":
                 return "function"
+            if t == "variable_declarator":
+                # check if value is arrow_function or function_expression
+                for child in node.children:
+                    if child.type in ("arrow_function", "function_expression"):
+                        return "function"
             if t == "class_declaration":
                 return "class"
             if t == "method_definition":
@@ -164,6 +169,22 @@ class SymbolExtractor:
 
     def _get_name(self, node) -> Optional[str]:
         """Return the text of the first child node with type 'identifier'."""
+        # JS/TS: variable_declarator — name is the identifier child
+        if node.type == "variable_declarator":
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # Go: name is in type_spec grandchild
+        if node.type == "type_declaration":
+            for child in node.children:
+                if child.type == "type_spec":
+                    name_node = child.child_by_field_name("name")
+                    if name_node:
+                        return name_node.text.decode("utf-8", errors="replace")
+            return None
+
         for child in node.children:
             if child.type == "identifier":
                 return child.text.decode("utf-8", errors="replace")
