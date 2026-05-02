@@ -24,6 +24,13 @@ LANGUAGE_MAP: dict[str, str] = {
     ".php": "php",
     ".swift": "swift",
     ".kt": "kotlin",
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".toml": "toml",
+    ".ini": "ini",
+    ".cfg": "ini",
+    ".env": "ini",
 }
 
 
@@ -179,6 +186,28 @@ class SymbolExtractor:
             if t == "class_declaration":
                 return "class"
 
+        elif lang == "json":
+            if t == "pair":
+                return "variable"
+            if t == "object":
+                return None  # don't create a symbol for the object container itself
+
+        elif lang == "yaml":
+            if t in ("block_mapping_pair", "flow_pair"):
+                return "variable"
+
+        elif lang == "toml":
+            if t == "table":
+                return "section"
+            if t == "pair":
+                return "variable"
+
+        elif lang == "ini":
+            if t == "section":
+                return "section"
+            if t == "setting":
+                return "variable"
+
         return None
 
     def _has_class_parent(self, node) -> bool:
@@ -246,6 +275,54 @@ class SymbolExtractor:
                     if name_node:
                         return name_node.text.decode("utf-8", errors="replace")
             return None
+
+        # JSON: pair node — key is the first string child; extract string_content
+        if self.language == "json" and t == "pair":
+            for child in node.children:
+                if child.type == "string":
+                    # prefer the string_content inner node (strips the quotes)
+                    for subchild in child.children:
+                        if subchild.type == "string_content":
+                            return subchild.text.decode("utf-8", errors="replace")
+                    # fallback: strip quote chars manually
+                    raw = child.text.decode("utf-8", errors="replace")
+                    return raw.strip('"\'')
+            return None
+
+        # YAML: block_mapping_pair or flow_pair — key is first child (flow_node → plain_scalar → string_scalar)
+        if self.language == "yaml" and t in ("block_mapping_pair", "flow_pair"):
+            key_node = node.children[0] if node.children else None
+            if key_node:
+                return key_node.text.decode("utf-8", errors="replace").rstrip(":").strip()
+            return None
+
+        # TOML: table — key is the bare_key (or quoted_key) child
+        if self.language == "toml":
+            if t == "table":
+                for child in node.children:
+                    if child.type in ("bare_key", "quoted_key"):
+                        return child.text.decode("utf-8", errors="replace")
+                return None
+            if t == "pair":
+                for child in node.children:
+                    if child.type in ("bare_key", "quoted_key"):
+                        return child.text.decode("utf-8", errors="replace")
+                return None
+
+        # INI: section — name is from section_name → text child
+        if self.language == "ini":
+            if t == "section":
+                for child in node.children:
+                    if child.type == "section_name":
+                        for subchild in child.children:
+                            if subchild.type == "text":
+                                return subchild.text.decode("utf-8", errors="replace")
+                return None
+            if t == "setting":
+                for child in node.children:
+                    if child.type == "setting_name":
+                        return child.text.decode("utf-8", errors="replace")
+                return None
 
         for child in node.children:
             if child.type == "identifier":
