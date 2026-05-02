@@ -1,7 +1,6 @@
 import os
 import json
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
 from mcp import types
 from .db import Database
 from .indexer import Indexer
@@ -125,13 +124,8 @@ async def call_tool(name: str, arguments: dict):
 
 
 def main():
-    import asyncio
-    asyncio.run(_run())
-
-
-async def _run():
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+    from .cli import main as cli_main
+    cli_main()
 
 
 if __name__ == "__main__":
