@@ -4,8 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-outline-graph"
-version = "0.2.2"
+version = "0.2.3"
 requires-python = ">=3.11"
+description = "Symbol-level code indexer MCP server — token-efficient AI editing with confirm-before-read flow"
+license = {text = "MIT"}
+authors = [{name = "Rushikesh Sakharle", email = "rishiananya123@gmail.com"}]
+keywords = ["mcp", "ai", "code-indexer", "tree-sitter", "claude", "cursor", "codex"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Editors :: Integrated Development Environments (IDE)",
+]
 dependencies = [
     "mcp>=1.0.0",
     "tree-sitter>=0.23.0",
