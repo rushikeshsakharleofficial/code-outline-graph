@@ -83,6 +83,8 @@ LANGUAGE_MAP: dict[str, str] = {
     ".sql": "sql",
     # Build / infra
     ".dockerfile": "dockerfile",
+    ".mk": "make",
+    ".make": "make",
 }
 
 FILENAME_MAP: dict[str, str] = {
@@ -440,6 +442,8 @@ class SymbolExtractor:
         elif lang == "make":
             if t == "rule":
                 return "function"
+            if t == "variable_assignment":
+                return "variable"
 
         elif lang == "perl":
             if t == "subroutine_declaration_statement":
@@ -811,11 +815,19 @@ class SymbolExtractor:
                     return child.text.decode("utf-8", errors="replace")
             return None
 
-        # Make: rule → targets child (first target name)
+        # Make: rule → targets child (first target name); skip special dot-targets
         if self.language == "make" and t == "rule":
             for child in node.children:
                 if child.type == "targets":
-                    return child.text.decode("utf-8", errors="replace").split()[0]
+                    name = child.text.decode("utf-8", errors="replace").split()[0]
+                    return None if name.startswith(".") else name
+            return None
+
+        # Make: variable_assignment → word child (variable name)
+        if self.language == "make" and t == "variable_assignment":
+            for child in node.children:
+                if child.type == "word":
+                    return child.text.decode("utf-8", errors="replace")
             return None
 
         # Perl: subroutine → bareword; package → second package token
