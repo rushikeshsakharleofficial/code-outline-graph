@@ -7,6 +7,8 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # allow pushing version bump commit
 
     steps:
       - uses: actions/checkout@v4
