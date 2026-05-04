@@ -25,6 +25,8 @@ This project is indexed with [code-outline-graph](https://github.com/rushikeshsa
 | `get_line_range(file, start, end)` | Read arbitrary line slice |
 
 Fall back to direct file reads only if these return empty results.
+
+**After every code change:** run `code-outline-graph update .` to keep the index current.
 {end}""".format(start=_SENTINEL_START, end=_SENTINEL_END)
 
 
@@ -74,8 +76,13 @@ def _write_codex_config(project_path: str) -> None:
 def _write_codex_hooks(project_path: str) -> None:
     codex_dir = os.path.join(project_path, ".codex")
     hooks_path = os.path.join(codex_dir, "hooks.json")
-    hook_entry = {
-        "hooks": [{"type": "command", "command": "code-outline-graph update . 2>/dev/null; true", "timeout": 30}]
+    update_cmd = "code-outline-graph update . 2>/dev/null; true"
+    session_entry = {
+        "hooks": [{"type": "command", "command": update_cmd, "timeout": 30}]
+    }
+    post_entry = {
+        "matcher": "edit|write|apply",
+        "hooks": [{"type": "command", "command": update_cmd, "timeout": 30}]
     }
     try:
         os.makedirs(codex_dir, exist_ok=True)
@@ -85,16 +92,17 @@ def _write_codex_hooks(project_path: str) -> None:
         else:
             config = {}
         config.setdefault("hooks", {})
-        config["hooks"].setdefault("SessionStart", [])
-        already = any(
-            any(hh.get("command", "").startswith("code-outline-graph update") for hh in h.get("hooks", []))
-            for h in config["hooks"]["SessionStart"]
-        )
-        if not already:
-            config["hooks"]["SessionStart"].append(hook_entry)
+        for event, entry in [("SessionStart", session_entry), ("PostToolUse", post_entry)]:
+            config["hooks"].setdefault(event, [])
+            already = any(
+                any(hh.get("command", "").startswith("code-outline-graph update") for hh in h.get("hooks", []))
+                for h in config["hooks"][event]
+            )
+            if not already:
+                config["hooks"][event].append(entry)
         with open(hooks_path, "w") as f:
             json.dump(config, f, indent=2)
-        print(f"Codex hook written to {hooks_path}")
+        print(f"Codex hooks written to {hooks_path}")
     except Exception as e:
         print(f"Warning: could not write .codex/hooks.json: {e}", file=sys.stderr)
 
@@ -102,8 +110,13 @@ def _write_codex_hooks(project_path: str) -> None:
 def _write_gemini_config(project_path: str) -> None:
     gemini_dir = os.path.join(project_path, ".gemini")
     config_path = os.path.join(gemini_dir, "settings.json")
-    hook_entry = {
-        "hooks": [{"type": "command", "command": "code-outline-graph update . 2>/dev/null; true", "timeout": 30000}]
+    update_cmd = "code-outline-graph update . 2>/dev/null; true"
+    session_entry = {
+        "hooks": [{"type": "command", "command": update_cmd, "timeout": 30000}]
+    }
+    after_tool_entry = {
+        "matcher": "write_.*|edit_.*|apply_.*",
+        "hooks": [{"type": "command", "command": update_cmd, "timeout": 30000}]
     }
     try:
         os.makedirs(gemini_dir, exist_ok=True)
@@ -115,16 +128,17 @@ def _write_gemini_config(project_path: str) -> None:
         config.setdefault("mcpServers", {})
         config["mcpServers"]["code-outline"] = {"command": "code-outline-graph", "args": ["serve"]}
         config.setdefault("hooks", {})
-        config["hooks"].setdefault("SessionStart", [])
-        already = any(
-            any(hh.get("command", "").startswith("code-outline-graph update") for hh in h.get("hooks", []))
-            for h in config["hooks"]["SessionStart"]
-        )
-        if not already:
-            config["hooks"]["SessionStart"].append(hook_entry)
+        for event, entry in [("SessionStart", session_entry), ("AfterTool", after_tool_entry)]:
+            config["hooks"].setdefault(event, [])
+            already = any(
+                any(hh.get("command", "").startswith("code-outline-graph update") for hh in h.get("hooks", []))
+                for h in config["hooks"][event]
+            )
+            if not already:
+                config["hooks"][event].append(entry)
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
-        print(f"Gemini MCP config + hook written to {config_path}")
+        print(f"Gemini MCP config + hooks written to {config_path}")
     except Exception as e:
         print(f"Warning: could not write .gemini/settings.json: {e}", file=sys.stderr)
 
@@ -132,9 +146,14 @@ def _write_gemini_config(project_path: str) -> None:
 def _write_claude_hooks(project_path: str) -> None:
     claude_dir = os.path.join(project_path, ".claude")
     config_path = os.path.join(claude_dir, "settings.json")
-    hook_entry = {
+    update_cmd = "code-outline-graph update . 2>/dev/null; true"
+    session_entry = {
         "matcher": "",
-        "hooks": [{"type": "command", "command": "code-outline-graph update . 2>/dev/null; true"}]
+        "hooks": [{"type": "command", "command": update_cmd}]
+    }
+    post_edit_entry = {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{"type": "command", "command": update_cmd}]
     }
     try:
         os.makedirs(claude_dir, exist_ok=True)
@@ -144,16 +163,17 @@ def _write_claude_hooks(project_path: str) -> None:
         else:
             config = {}
         config.setdefault("hooks", {})
-        config["hooks"].setdefault("SessionStart", [])
-        already = any(
-            any(hh.get("command", "").startswith("code-outline-graph update") for hh in h.get("hooks", []))
-            for h in config["hooks"]["SessionStart"]
-        )
-        if not already:
-            config["hooks"]["SessionStart"].append(hook_entry)
+        for event, entry in [("SessionStart", session_entry), ("PostToolUse", post_edit_entry)]:
+            config["hooks"].setdefault(event, [])
+            already = any(
+                any(hh.get("command", "").startswith("code-outline-graph update") for hh in h.get("hooks", []))
+                for h in config["hooks"][event]
+            )
+            if not already:
+                config["hooks"][event].append(entry)
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
-        print(f"Claude Code hook written to {config_path}")
+        print(f"Claude Code hooks written to {config_path}")
     except Exception as e:
         print(f"Warning: could not write .claude/settings.json: {e}", file=sys.stderr)
 
@@ -170,13 +190,14 @@ def _get_db_indexer(project_path: str | None = None):
 
 def cmd_build(args):
     path = resolve_project_path(args.path or ".")
-    print(f"Indexing {path}...")
+
+    print(f"\n[1/7] Indexing {path}...")
     _db, indexer, db_path = _get_db_indexer(path)
     stats = indexer.index_project(path)
-    print(f"Done: {stats['files']} files, {stats['symbols']} symbols, {stats['skipped']} skipped")
-    print(f"DB: {db_path}")
+    print(f"      Done: {stats['files']} files, {stats['symbols']} symbols, {stats['skipped']} skipped")
+    print(f"      DB: {db_path}")
 
-    # Claude Code / Cursor
+    print("\n[2/7] Writing Claude Code / Cursor MCP config (.mcp.json)...")
     mcp_path = os.path.join(path, ".mcp.json")
     try:
         if os.path.exists(mcp_path):
@@ -184,35 +205,32 @@ def cmd_build(args):
                 config = json.load(f)
         else:
             config = {}
-
         config.setdefault("mcpServers", {})
-        config["mcpServers"]["code-outline"] = {
-            "command": "code-outline-graph",
-            "args": ["serve", path]
-        }
-
+        config["mcpServers"]["code-outline"] = {"command": "code-outline-graph", "args": ["serve", path]}
         with open(mcp_path, "w") as f:
             json.dump(config, f, indent=2)
-        print(f"MCP config written to {mcp_path}")
+        print(f"      Written: {mcp_path}")
     except Exception as e:
-        print(f"Warning: could not write .mcp.json: {e}", file=sys.stderr)
+        print(f"      Warning: could not write .mcp.json: {e}", file=sys.stderr)
 
-    # Codex CLI — MCP config + SessionStart hook
+    print("\n[3/7] Writing Codex CLI config + hooks...")
     _write_codex_config(path)
     _write_codex_hooks(path)
 
-    # Gemini CLI — MCP config + SessionStart hook
+    print("\n[4/7] Writing Gemini CLI config + hooks...")
     _write_gemini_config(path)
 
-    # Claude Code — SessionStart hook (MCP already via .mcp.json)
+    print("\n[5/7] Writing Claude Code SessionStart + PostToolUse hooks...")
     _write_claude_hooks(path)
 
-    # AI instruction blocks so clients that read markdown know to use the tools
+    print("\n[6/7] Writing AI instruction blocks (AGENTS.md, GEMINI.md)...")
     _upsert_instruction_block(path, "AGENTS.md")
     _upsert_instruction_block(path, "GEMINI.md")
 
-    # Install Claude Code skill (compulsory)
+    print("\n[7/7] Installing Claude Code skill...")
     cmd_install_skill(None)
+
+    print("\nBuild complete. All AI clients configured.")
 
 
 def cmd_update(args):

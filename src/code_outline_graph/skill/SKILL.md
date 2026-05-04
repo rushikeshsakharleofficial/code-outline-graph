@@ -84,6 +84,18 @@ list_outline({"file": "src/components/ShiftCard.js"})
 
 ---
 
+## After Every Code Change
+
+**MANDATORY:** After editing or creating any source file, run:
+
+```bash
+code-outline-graph update .
+```
+
+This keeps the index current so future symbol lookups reflect your changes. If the MCP server is running, the file watcher handles this automatically — but always run it manually after bulk edits or when unsure.
+
+---
+
 ## When to Fall Back to Read/Grep
 
 Only if:
