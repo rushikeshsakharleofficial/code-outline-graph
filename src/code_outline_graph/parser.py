@@ -104,12 +104,6 @@ def detect_language(file_path: str) -> Optional[str]:
     return LANGUAGE_MAP.get(p.suffix)
 
 
-# Tree-sitter can hang on huge files (e.g. package-lock.json at 50MB).
-# Truncate at 256 KB — enough for any real source file; large data files
-# get partial indexing of their first N entries rather than blocking forever.
-_MAX_PARSE_BYTES = 256 * 1024
-
-
 class SymbolParser:
     """Facade that manages per-language parsers and dispatches parse requests."""
 
@@ -135,8 +129,6 @@ class SymbolParser:
 
         if source is None:
             source = Path(file_path).read_bytes()
-        if len(source) > _MAX_PARSE_BYTES:
-            source = source[:_MAX_PARSE_BYTES]
         parser = self._get_parser(language)
         if parser is None:
             return []

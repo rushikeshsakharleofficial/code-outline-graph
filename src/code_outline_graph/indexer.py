@@ -25,12 +25,16 @@ def compute_checksum(file_path: str) -> str:
     return h.hexdigest()
 
 
+_LARGE_FILE_THRESHOLD = 512 * 1024  # files >= 512 KB deferred to background
+
+
 class Indexer:
     def __init__(self, db: Database):
         self.db = db
         self.parser = SymbolParser()
         self._embedder = None  # lazy singleton — loaded once, reused
         self._embed_thread: threading.Thread | None = None
+        self._large_file_thread: threading.Thread | None = None
         self._embed_progress: dict = {"total": 0, "done": 0, "current": ""}
 
     def _get_embedder(self):
@@ -145,6 +149,7 @@ class Indexer:
 
         # Phase 1: walk serially — skip callbacks must stay on main thread
         indexable: list[str] = []
+        large_files: list[str] = []
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _SKIP_DIRS]
             for fname in files:
@@ -160,9 +165,16 @@ class Indexer:
                         on_skip(full, "gitignored")
                     continue
                 if detect_language(full):
-                    indexable.append(full)
+                    try:
+                        size = os.path.getsize(full)
+                    except OSError:
+                        size = 0
+                    if size >= _LARGE_FILE_THRESHOLD:
+                        large_files.append(full)
+                    else:
+                        indexable.append(full)
 
-        # Phase 2: parse all files in parallel — no DB writes yet, no lock contention
+        # Phase 2: parse all normal files in parallel — no DB writes, no lock contention
         _cb_lock = threading.Lock()
         n_workers = min(32, (os.cpu_count() or 4) * 4)
         parse_results: list[tuple] = []  # (symbols, file_path, checksum, language)
@@ -202,6 +214,26 @@ class Indexer:
         # Phase 3: bulk-write all results — one transaction per 2000 files,
         # FTS triggers disabled, FTS rebuilt once at the end
         self.db.bulk_insert_all(parse_results)
+
+        # Phase 4: large files indexed in background — build doesn't wait for them
+        stats["large_deferred"] = len(large_files)
+        if large_files:
+            def _index_large_files():
+                large_results = []
+                for fp in large_files:
+                    try:
+                        symbols, checksum, lang, _ = _parse_only(fp)
+                        large_results.append((symbols, fp, checksum, lang))
+                    except Exception:
+                        pass
+                if large_results:
+                    self.db.bulk_insert_all(large_results)
+            if self._large_file_thread and self._large_file_thread.is_alive():
+                self._large_file_thread.join(timeout=1)
+            self._large_file_thread = threading.Thread(
+                target=_index_large_files, daemon=True
+            )
+            self._large_file_thread.start()
 
         # Embed in background — don't block return on large codebases
         if self._embed_thread and self._embed_thread.is_alive():

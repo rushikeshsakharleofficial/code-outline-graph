@@ -304,6 +304,8 @@ def cmd_build(args):
     sys.stderr.flush()
 
     skipped_line = f"      Skipped: {stats['skipped']}  •  Errors: {stats.get('errors', 0)}  •  Time: {elapsed_index:.1f}s"
+    if stats.get("large_deferred"):
+        skipped_line += f"  •  Large files (background): {stats['large_deferred']}"
     print(skipped_line)
 
     # Dir summaries
