@@ -5,6 +5,158 @@ import sys
 
 from .paths import ensure_project_db_path, resolve_project_path
 
+_SENTINEL_START = "<!-- code-outline-graph:start -->"
+_SENTINEL_END = "<!-- code-outline-graph:end -->"
+
+_AI_INSTRUCTION_BLOCK = """{start}
+## code-outline-graph MCP Tools
+
+This project is indexed with [code-outline-graph](https://github.com/rushikeshsakharleofficial/code-outline-graph). MCP server name: `code-outline`. Use these tools instead of reading source files directly (10x–50x fewer tokens).
+
+| Tool | When to use |
+|------|-------------|
+| `resolve_edit_target(description)` | Find function/class by natural language — returns signatures only, no body |
+| `read_symbol_body(name, file)` | Read one symbol's source lines (never the full file) |
+| `list_outline(file)` | All symbols + line ranges in a file |
+| `get_outline_summary(file)` | Compressed signatures view |
+| `find_by_keyword(query)` | Search all indexed symbol names |
+| `get_file_header(file)` | Imports + top-level constants only |
+| `get_symbol(name)` | Exact symbol metadata |
+| `get_line_range(file, start, end)` | Read arbitrary line slice |
+
+Fall back to direct file reads only if these return empty results.
+{end}""".format(start=_SENTINEL_START, end=_SENTINEL_END)
+
+
+def _upsert_instruction_block(project_path: str, filename: str) -> None:
+    file_path = os.path.join(project_path, filename)
+    try:
+        if os.path.exists(file_path):
+            with open(file_path) as f:
+                content = f.read()
+            if _SENTINEL_START in content and _SENTINEL_END in content:
+                start_idx = content.index(_SENTINEL_START)
+                end_idx = content.index(_SENTINEL_END) + len(_SENTINEL_END)
+                content = content[:start_idx] + _AI_INSTRUCTION_BLOCK + content[end_idx:]
+            else:
+                content = content.rstrip() + "\n\n" + _AI_INSTRUCTION_BLOCK + "\n"
+        else:
+            content = _AI_INSTRUCTION_BLOCK + "\n"
+        with open(file_path, "w") as f:
+            f.write(content)
+        print(f"Instructions written to {file_path}")
+    except Exception as e:
+        print(f"Warning: could not write {filename}: {e}", file=sys.stderr)
+
+
+def _write_codex_config(project_path: str) -> None:
+    codex_dir = os.path.join(project_path, ".codex")
+    config_path = os.path.join(codex_dir, "config.toml")
+    try:
+        os.makedirs(codex_dir, exist_ok=True)
+        entry = '[mcp_servers.code-outline]\ncommand = "code-outline-graph"\nargs = ["serve"]\n'
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                existing = f.read()
+            if "[mcp_servers.code-outline]" in existing:
+                print(f"Codex config already has code-outline entry: {config_path}")
+                return
+            content = existing.rstrip() + "\n\n" + entry
+        else:
+            content = entry
+        with open(config_path, "w") as f:
+            f.write(content)
+        print(f"Codex MCP config written to {config_path}")
+    except Exception as e:
+        print(f"Warning: could not write .codex/config.toml: {e}", file=sys.stderr)
+
+
+def _write_codex_hooks(project_path: str) -> None:
+    codex_dir = os.path.join(project_path, ".codex")
+    hooks_path = os.path.join(codex_dir, "hooks.json")
+    hook_entry = {
+        "hooks": [{"type": "command", "command": "code-outline-graph update . 2>/dev/null; true", "timeout": 30}]
+    }
+    try:
+        os.makedirs(codex_dir, exist_ok=True)
+        if os.path.exists(hooks_path):
+            with open(hooks_path) as f:
+                config = json.load(f)
+        else:
+            config = {}
+        config.setdefault("hooks", {})
+        config["hooks"].setdefault("SessionStart", [])
+        already = any(
+            any(hh.get("command", "").startswith("code-outline-graph update") for hh in h.get("hooks", []))
+            for h in config["hooks"]["SessionStart"]
+        )
+        if not already:
+            config["hooks"]["SessionStart"].append(hook_entry)
+        with open(hooks_path, "w") as f:
+            json.dump(config, f, indent=2)
+        print(f"Codex hook written to {hooks_path}")
+    except Exception as e:
+        print(f"Warning: could not write .codex/hooks.json: {e}", file=sys.stderr)
+
+
+def _write_gemini_config(project_path: str) -> None:
+    gemini_dir = os.path.join(project_path, ".gemini")
+    config_path = os.path.join(gemini_dir, "settings.json")
+    hook_entry = {
+        "hooks": [{"type": "command", "command": "code-outline-graph update . 2>/dev/null; true", "timeout": 30000}]
+    }
+    try:
+        os.makedirs(gemini_dir, exist_ok=True)
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                config = json.load(f)
+        else:
+            config = {}
+        config.setdefault("mcpServers", {})
+        config["mcpServers"]["code-outline"] = {"command": "code-outline-graph", "args": ["serve"]}
+        config.setdefault("hooks", {})
+        config["hooks"].setdefault("SessionStart", [])
+        already = any(
+            any(hh.get("command", "").startswith("code-outline-graph update") for hh in h.get("hooks", []))
+            for h in config["hooks"]["SessionStart"]
+        )
+        if not already:
+            config["hooks"]["SessionStart"].append(hook_entry)
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+        print(f"Gemini MCP config + hook written to {config_path}")
+    except Exception as e:
+        print(f"Warning: could not write .gemini/settings.json: {e}", file=sys.stderr)
+
+
+def _write_claude_hooks(project_path: str) -> None:
+    claude_dir = os.path.join(project_path, ".claude")
+    config_path = os.path.join(claude_dir, "settings.json")
+    hook_entry = {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": "code-outline-graph update . 2>/dev/null; true"}]
+    }
+    try:
+        os.makedirs(claude_dir, exist_ok=True)
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                config = json.load(f)
+        else:
+            config = {}
+        config.setdefault("hooks", {})
+        config["hooks"].setdefault("SessionStart", [])
+        already = any(
+            any(hh.get("command", "").startswith("code-outline-graph update") for hh in h.get("hooks", []))
+            for h in config["hooks"]["SessionStart"]
+        )
+        if not already:
+            config["hooks"]["SessionStart"].append(hook_entry)
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+        print(f"Claude Code hook written to {config_path}")
+    except Exception as e:
+        print(f"Warning: could not write .claude/settings.json: {e}", file=sys.stderr)
+
 
 def _get_db_indexer(project_path: str | None = None):
     from .db import Database
@@ -24,7 +176,7 @@ def cmd_build(args):
     print(f"Done: {stats['files']} files, {stats['symbols']} symbols, {stats['skipped']} skipped")
     print(f"DB: {db_path}")
 
-    # Auto-add to .mcp.json in the project root
+    # Claude Code / Cursor
     mcp_path = os.path.join(path, ".mcp.json")
     try:
         if os.path.exists(mcp_path):
@@ -44,6 +196,23 @@ def cmd_build(args):
         print(f"MCP config written to {mcp_path}")
     except Exception as e:
         print(f"Warning: could not write .mcp.json: {e}", file=sys.stderr)
+
+    # Codex CLI — MCP config + SessionStart hook
+    _write_codex_config(path)
+    _write_codex_hooks(path)
+
+    # Gemini CLI — MCP config + SessionStart hook
+    _write_gemini_config(path)
+
+    # Claude Code — SessionStart hook (MCP already via .mcp.json)
+    _write_claude_hooks(path)
+
+    # AI instruction blocks so clients that read markdown know to use the tools
+    _upsert_instruction_block(path, "AGENTS.md")
+    _upsert_instruction_block(path, "GEMINI.md")
+
+    # Install Claude Code skill (compulsory)
+    cmd_install_skill(None)
 
 
 def cmd_update(args):
@@ -130,6 +299,22 @@ def cmd_status(args):
     print(f"DB: {db_path}")
 
 
+def cmd_install_skill(_args):
+    import shutil
+    skill_src_dir = os.path.join(os.path.dirname(__file__), "skill")
+    if not os.path.isdir(skill_src_dir):
+        print("Error: bundled skill directory not found in package.", file=sys.stderr)
+        sys.exit(1)
+    skill_dest_dir = os.path.expanduser("~/.claude/skills/code-outline-graph")
+    os.makedirs(skill_dest_dir, exist_ok=True)
+    for fname in os.listdir(skill_src_dir):
+        src = os.path.join(skill_src_dir, fname)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(skill_dest_dir, fname))
+            print(f"Installed: {fname} → {skill_dest_dir}/")
+    print(f"Skill installed to {skill_dest_dir}")
+
+
 def cmd_serve(_args):
     import asyncio
     from .paths import project_db_path
@@ -182,6 +367,8 @@ def main():
     p_serve = sub.add_parser("serve", help="Start MCP server (stdio)")
     p_serve.add_argument("project", nargs="?", default=".", help="Project path (default: cwd)")
 
+    sub.add_parser("install-skill", help="Install Claude Code skill to ~/.claude/skills/")
+
     args = parser.parse_args()
 
     if args.command == "build":
@@ -196,5 +383,7 @@ def main():
         cmd_status(args)
     elif args.command == "serve" or args.command is None:
         cmd_serve(args)
+    elif args.command == "install-skill":
+        cmd_install_skill(args)
     else:
         parser.print_help()

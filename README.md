@@ -25,12 +25,13 @@ code-outline-graph build .
 
 | Command | Description |
 |---------|-------------|
-| `code-outline-graph build [path]` | Index project + write `.mcp.json` |
+| `code-outline-graph build [path]` | Index project + write MCP configs for all clients |
 | `code-outline-graph update [path]` | Reindex changed files only |
 | `code-outline-graph search <query>` | Search symbols by keyword |
 | `code-outline-graph outline <file>` | List all symbols in a file |
 | `code-outline-graph status [path]` | Show index stats |
 | `code-outline-graph serve [path]` | Start MCP server (stdio) |
+| `code-outline-graph install-skill` | Install Claude Code skill to `~/.claude/skills/` |
 
 ## MCP Tools
 
@@ -82,17 +83,26 @@ Each project gets its own SQLite DB at `~/.cache/code-outline-graph/<hash>/vecto
 
 ## MCP Configuration
 
-`build` auto-writes `.mcp.json` to your project root:
+`build` auto-configures all supported clients in one shot:
 
-```json
-{
-  "mcpServers": {
-    "code-outline": {
-      "command": "code-outline-graph",
-      "args": ["serve"]
-    }
-  }
-}
+| Client | MCP config | SessionStart hook |
+|--------|-----------|-------------------|
+| Claude Code / Cursor | `.mcp.json` | `.claude/settings.json` |
+| Codex CLI | `.codex/config.toml` | `.codex/hooks.json` |
+| Gemini CLI | `.gemini/settings.json` | `.gemini/settings.json` |
+
+It also appends usage instructions (sentinel-bounded, safe to re-run) to `AGENTS.md` and `GEMINI.md` so clients that read those files know to use the MCP tools.
+
+The `SessionStart` hook runs `code-outline-graph update .` at the start of every AI session, keeping the index fresh without manual intervention.
+
+## Claude Code Skill
+
+`build` automatically installs the Claude Code skill to `~/.claude/skills/code-outline-graph/` (`SKILL.md` + `examples.md`). The skill teaches Claude the confirm-before-read protocol and tool reference.
+
+To install manually or update after upgrading:
+
+```bash
+code-outline-graph install-skill
 ```
 
 ## Development
