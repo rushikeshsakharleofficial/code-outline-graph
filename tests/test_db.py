@@ -6,16 +6,26 @@ from code_outline_graph import db
 class FakeConnection:
     def __init__(self):
         self.enable_calls = []
+        self.execute_calls = []
         self.row_factory = None
 
     def enable_load_extension(self, enabled):
         self.enable_calls.append(enabled)
+
+    def execute(self, sql, *_args):
+        self.execute_calls.append(sql)
+        return FakeCursor()
 
     def executescript(self, _sql):
         pass
 
     def commit(self):
         pass
+
+
+class FakeCursor:
+    def fetchall(self):
+        return []
 
 
 def test_database_temporarily_enables_extension_loading(monkeypatch):

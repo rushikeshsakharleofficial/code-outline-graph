@@ -41,3 +41,7 @@ packages = ["src/code_outline_graph"]
 
 [dependency-groups]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".pytest_cache", "pytest_cache", "pytest-cache-files-*"]

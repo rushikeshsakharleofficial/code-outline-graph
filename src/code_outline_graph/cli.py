@@ -362,32 +362,25 @@ def cmd_build(args):
 def cmd_update(args):
     path = resolve_project_path(args.path or ".")
     print(f"Updating index for {path}...")
-    db, indexer, _db_path = _get_db_indexer(path)
-    from .parser import detect_language
-    from .indexer import compute_checksum
+    _db, indexer, _db_path = _get_db_indexer(path)
+    from .indexer import iter_indexable_files
+
     updated = 0
     skipped = 0
-    for root, dirs, files in os.walk(path):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
-            "node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"
-        )]
-        for fname in files:
-            full = os.path.join(root, fname)
-            if fname in (".env", ".env.local", ".env.production", ".env.development"):
+
+    def _on_skip(_full_path: str, _reason: str) -> None:
+        nonlocal skipped
+        skipped += 1
+
+    for full, language, size, mtime_ns in iter_indexable_files(path, on_skip=_on_skip):
+        try:
+            if indexer.is_file_current(full, size, mtime_ns):
                 skipped += 1
                 continue
-            if not detect_language(full):
-                continue
-            try:
-                current = compute_checksum(full)
-                stored = db.get_indexed_checksum(full)
-                if stored != current:
-                    indexer.index_file(full)
-                    updated += 1
-                else:
-                    skipped += 1
-            except Exception:
-                pass
+            indexer.index_file(full, language=language, file_size=size, mtime_ns=mtime_ns)
+            updated += 1
+        except Exception:
+            pass
     print(f"Updated {updated} files, {skipped} unchanged")
 
 

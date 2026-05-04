@@ -1,0 +1,9 @@
+[mcp_servers.code-outline]
+command = "code-outline-graph"
+args = ["serve"]
+
+[mcp_servers.code-outline.tools.get_outline_summary]
+approval_mode = "approve"
+
+[mcp_servers.code-outline.tools.read_symbol_body]
+approval_mode = "approve"

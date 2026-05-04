@@ -85,6 +85,8 @@ class Database:
                 git_head      TEXT,
                 symbol_count  INTEGER,
                 language      TEXT,
+                file_size     INTEGER,
+                mtime_ns      INTEGER,
                 indexed_at    INTEGER NOT NULL
             );
 
@@ -105,7 +107,18 @@ class Database:
               VALUES (new.id, new.name, new.kind, new.file_path, new.signature, new.docstring);
             END;
         """)
+        self._ensure_indexed_files_columns()
         self.conn.commit()
+
+    def _ensure_indexed_files_columns(self) -> None:
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(indexed_files)").fetchall()
+        }
+        if "file_size" not in columns:
+            self.conn.execute("ALTER TABLE indexed_files ADD COLUMN file_size INTEGER")
+        if "mtime_ns" not in columns:
+            self.conn.execute("ALTER TABLE indexed_files ADD COLUMN mtime_ns INTEGER")
 
     def insert_symbols(
         self,
@@ -113,6 +126,8 @@ class Database:
         file_path: str,
         checksum: str,
         language: str,
+        file_size: Optional[int] = None,
+        mtime_ns: Optional[int] = None,
     ) -> None:
         with self._lock:
             now = int(time.time())
@@ -141,18 +156,8 @@ class Database:
                         for sym in symbols
                     ],
                 )
-                self.conn.execute(
-                    """
-                    INSERT INTO indexed_files
-                        (file_path, checksum, git_head, symbol_count, language, indexed_at)
-                    VALUES (?, ?, NULL, ?, ?, ?)
-                    ON CONFLICT(file_path) DO UPDATE SET
-                        checksum     = excluded.checksum,
-                        symbol_count = excluded.symbol_count,
-                        language     = excluded.language,
-                        indexed_at   = excluded.indexed_at
-                    """,
-                    (file_path, checksum, len(symbols), language, now),
+                self._upsert_indexed_file(
+                    file_path, checksum, len(symbols), language, now, file_size, mtime_ns
                 )
 
     _TRIGGER_SQL = """
@@ -174,64 +179,112 @@ class Database:
 
     def bulk_insert_all(
         self,
-        file_results: list[tuple],  # [(symbols, file_path, checksum, language), ...]
+        file_results: list[tuple],
         chunk_size: int = 2000,
+        rebuild_fts: bool = True,
     ) -> None:
         """Write all parsed results as fast as possible.
 
-        Disables FTS triggers during inserts, commits in chunks to bound
-        memory, then rebuilds FTS once and recreates triggers.
+        When rebuild_fts is true, disables FTS triggers during inserts, commits
+        in chunks to bound memory, then rebuilds FTS once and recreates triggers.
         """
+        if not file_results:
+            return
         with self._lock:
-            self.conn.execute("DROP TRIGGER IF EXISTS symbols_ai")
-            self.conn.execute("DROP TRIGGER IF EXISTS symbols_ad")
-            self.conn.execute("DROP TRIGGER IF EXISTS symbols_au")
-            self.conn.commit()
+            if rebuild_fts:
+                self.conn.execute("DROP TRIGGER IF EXISTS symbols_ai")
+                self.conn.execute("DROP TRIGGER IF EXISTS symbols_ad")
+                self.conn.execute("DROP TRIGGER IF EXISTS symbols_au")
+                self.conn.commit()
             try:
                 now = int(time.time())
                 for i in range(0, len(file_results), chunk_size):
                     chunk = file_results[i : i + chunk_size]
                     with self.conn:
-                        for symbols, file_path, checksum, language in chunk:
-                            self.conn.execute(
-                                "DELETE FROM vec_symbols WHERE symbol_id IN "
-                                "(SELECT id FROM symbols WHERE file_path=?)",
-                                (file_path,),
+                        for result in chunk:
+                            symbols, file_path, checksum, language, file_size, mtime_ns = (
+                                self._unpack_file_result(result)
                             )
-                            self.conn.execute(
-                                "DELETE FROM symbols WHERE file_path=?", (file_path,)
+                            self._replace_file_symbols(
+                                symbols, file_path, checksum, language, now, file_size, mtime_ns
                             )
-                            if symbols:
-                                self.conn.executemany(
-                                    "INSERT INTO symbols (name, kind, file_path, start_line,"
-                                    " end_line, signature, docstring, parent_name, parent_id,"
-                                    " language, checksum, indexed_at)"
-                                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                                    [
-                                        (
-                                            s.name, s.kind, s.file_path,
-                                            s.start_line, s.end_line, s.signature,
-                                            s.docstring, s.parent_name, s.parent_id,
-                                            s.language, s.checksum, now,
-                                        )
-                                        for s in symbols
-                                    ],
-                                )
-                            self.conn.execute(
-                                "INSERT INTO indexed_files"
-                                " (file_path, checksum, git_head, symbol_count, language, indexed_at)"
-                                " VALUES (?,?,NULL,?,?,?)"
-                                " ON CONFLICT(file_path) DO UPDATE SET"
-                                " checksum=excluded.checksum, symbol_count=excluded.symbol_count,"
-                                " language=excluded.language, indexed_at=excluded.indexed_at",
-                                (file_path, checksum, len(symbols), language, now),
-                            )
-                # Rebuild FTS once from the content table
-                self.conn.execute("INSERT INTO symbols_fts(symbols_fts) VALUES('rebuild')")
+                if rebuild_fts:
+                    self.conn.execute("INSERT INTO symbols_fts(symbols_fts) VALUES('rebuild')")
                 self.conn.commit()
             finally:
-                self.conn.executescript(self._TRIGGER_SQL)
-                self.conn.commit()
+                if rebuild_fts:
+                    self.conn.executescript(self._TRIGGER_SQL)
+                    self.conn.commit()
+
+    @staticmethod
+    def _unpack_file_result(result: tuple) -> tuple:
+        if len(result) == 4:
+            symbols, file_path, checksum, language = result
+            return symbols, file_path, checksum, language, None, None
+        return result
+
+    def _replace_file_symbols(
+        self,
+        symbols: list[Symbol],
+        file_path: str,
+        checksum: str,
+        language: str,
+        now: int,
+        file_size: Optional[int],
+        mtime_ns: Optional[int],
+    ) -> None:
+        self.conn.execute(
+            "DELETE FROM vec_symbols WHERE symbol_id IN "
+            "(SELECT id FROM symbols WHERE file_path=?)",
+            (file_path,),
+        )
+        self.conn.execute("DELETE FROM symbols WHERE file_path=?", (file_path,))
+        if symbols:
+            self.conn.executemany(
+                "INSERT INTO symbols (name, kind, file_path, start_line,"
+                " end_line, signature, docstring, parent_name, parent_id,"
+                " language, checksum, indexed_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                [
+                    (
+                        s.name, s.kind, s.file_path,
+                        s.start_line, s.end_line, s.signature,
+                        s.docstring, s.parent_name, s.parent_id,
+                        s.language, s.checksum, now,
+                    )
+                    for s in symbols
+                ],
+            )
+        self._upsert_indexed_file(
+            file_path, checksum, len(symbols), language, now, file_size, mtime_ns
+        )
+
+    def _upsert_indexed_file(
+        self,
+        file_path: str,
+        checksum: str,
+        symbol_count: int,
+        language: str,
+        now: int,
+        file_size: Optional[int],
+        mtime_ns: Optional[int],
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO indexed_files
+                (file_path, checksum, git_head, symbol_count, language,
+                 file_size, mtime_ns, indexed_at)
+            VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
+            ON CONFLICT(file_path) DO UPDATE SET
+                checksum     = excluded.checksum,
+                symbol_count = excluded.symbol_count,
+                language     = excluded.language,
+                file_size    = excluded.file_size,
+                mtime_ns     = excluded.mtime_ns,
+                indexed_at   = excluded.indexed_at
+            """,
+            (file_path, checksum, symbol_count, language, file_size, mtime_ns, now),
+        )
 
     def delete_symbols_for_file(self, file_path: str) -> None:
         with self._lock:
@@ -330,6 +383,31 @@ class Database:
             (file_path,),
         ).fetchone()
         return row["checksum"] if row is not None else None
+
+    def get_indexed_file_state(self, file_path: str) -> Optional[dict]:
+        row = self.conn.execute(
+            """
+            SELECT checksum, file_size, mtime_ns
+            FROM indexed_files
+            WHERE file_path = ?
+            """,
+            (file_path,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def update_indexed_file_metadata(
+        self, file_path: str, file_size: int, mtime_ns: int
+    ) -> None:
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    UPDATE indexed_files
+                    SET file_size = ?, mtime_ns = ?
+                    WHERE file_path = ?
+                    """,
+                    (file_size, mtime_ns, file_path),
+                )
 
     def close(self) -> None:
         with self._lock:

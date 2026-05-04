@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "code-outline-graph update . 2>/dev/null; true",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "edit|write|apply",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "code-outline-graph update . 2>/dev/null; true",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "code-outline": {
+      "command": "code-outline-graph",
+      "args": [
+        "serve"
+      ]
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "code-outline-graph update . 2>/dev/null; true",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "write_.*|edit_.*|apply_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "code-outline-graph update . 2>/dev/null; true",
+            "timeout": 30000
+          }
+        ]
+      }
+    ]
+  }
+}
