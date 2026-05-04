@@ -118,8 +118,8 @@ class SymbolParser:
                 self._parsers[language] = None  # unavailable — skip silently
         return self._parsers[language]
 
-    def parse_file(self, file_path: str) -> list[Symbol]:
-        """Parse a file and return extracted symbols."""
+    def parse_file(self, file_path: str, source: bytes | None = None) -> list[Symbol]:
+        """Parse a file and return extracted symbols. Pass source to avoid a second read."""
         language = detect_language(file_path)
         if language is None:
             return []
@@ -127,7 +127,8 @@ class SymbolParser:
         if language == "sqlite":
             return _parse_sqlite_schema(file_path)
 
-        source = Path(file_path).read_bytes()
+        if source is None:
+            source = Path(file_path).read_bytes()
         parser = self._get_parser(language)
         if parser is None:
             return []

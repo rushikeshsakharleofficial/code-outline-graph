@@ -38,6 +38,9 @@ class Database:
         self._lock = threading.RLock()
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA cache_size=-65536")   # 64 MB page cache
+        self.conn.execute("PRAGMA mmap_size=268435456") # 256 MB memory-mapped I/O
+        self.conn.execute("PRAGMA temp_store=memory")
         self.conn.row_factory = sqlite3.Row
         _load_sqlite_vec(self.conn)
         self._create_schema()
@@ -59,8 +62,11 @@ class Database:
                 checksum    TEXT NOT NULL,
                 indexed_at  INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);
-            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+            CREATE INDEX IF NOT EXISTS idx_symbols_file      ON symbols(file_path);
+            CREATE INDEX IF NOT EXISTS idx_symbols_name      ON symbols(name);
+            CREATE INDEX IF NOT EXISTS idx_symbols_file_line ON symbols(file_path, start_line);
+            CREATE INDEX IF NOT EXISTS idx_symbols_name_file ON symbols(name, file_path);
+            CREATE INDEX IF NOT EXISTS idx_symbols_parent    ON symbols(parent_id);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
                 name, kind, file_path, signature, docstring,
@@ -111,36 +117,30 @@ class Database:
         with self._lock:
             now = int(time.time())
             with self.conn:
-                # delete vec_symbols first (foreign key order)
-                ids = [row[0] for row in self.conn.execute("SELECT id FROM symbols WHERE file_path=?", (file_path,)).fetchall()]
-                if ids:
-                    placeholders = ",".join("?" * len(ids))
-                    self.conn.execute(f"DELETE FROM vec_symbols WHERE symbol_id IN ({placeholders})", ids)
+                # subquery delete avoids a separate SELECT + dynamic IN clause
+                self.conn.execute(
+                    "DELETE FROM vec_symbols WHERE symbol_id IN (SELECT id FROM symbols WHERE file_path=?)",
+                    (file_path,),
+                )
                 self.conn.execute("DELETE FROM symbols WHERE file_path=?", (file_path,))
-                for sym in symbols:
-                    self.conn.execute(
-                        """
-                        INSERT INTO symbols
-                            (name, kind, file_path, start_line, end_line,
-                             signature, docstring, parent_name, parent_id,
-                             language, checksum, indexed_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
+                self.conn.executemany(
+                    """
+                    INSERT INTO symbols
+                        (name, kind, file_path, start_line, end_line,
+                         signature, docstring, parent_name, parent_id,
+                         language, checksum, indexed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
                         (
-                            sym.name,
-                            sym.kind,
-                            sym.file_path,
-                            sym.start_line,
-                            sym.end_line,
-                            sym.signature,
-                            sym.docstring,
-                            sym.parent_name,
-                            sym.parent_id,
-                            sym.language,
-                            sym.checksum,
-                            now,
-                        ),
-                    )
+                            sym.name, sym.kind, sym.file_path,
+                            sym.start_line, sym.end_line, sym.signature,
+                            sym.docstring, sym.parent_name, sym.parent_id,
+                            sym.language, sym.checksum, now,
+                        )
+                        for sym in symbols
+                    ],
+                )
                 self.conn.execute(
                     """
                     INSERT INTO indexed_files

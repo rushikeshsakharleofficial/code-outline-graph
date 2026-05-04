@@ -43,9 +43,15 @@ class Indexer:
         """Parse and store symbols for one file. Returns symbol count."""
         if os.path.abspath(file_path) == os.path.abspath(self.db.path):
             return 0
-        checksum = compute_checksum(file_path)
         language = detect_language(file_path) or "unknown"
-        symbols = _get_thread_parser().parse_file(file_path)
+        # Read once — compute checksum from bytes, pass same bytes to parser
+        if language != "sqlite":
+            source = open(file_path, "rb").read()
+            checksum = hashlib.blake2b(source, digest_size=16).hexdigest()
+            symbols = _get_thread_parser().parse_file(file_path, source=source)
+        else:
+            checksum = compute_checksum(file_path)
+            symbols = _get_thread_parser().parse_file(file_path)
         for s in symbols:
             s.checksum = checksum
         self.db.insert_symbols(symbols, file_path, checksum, language)
@@ -158,7 +164,7 @@ class Indexer:
 
         # Phase 2: parse + store in parallel; DB writes are already lock-protected
         _cb_lock = threading.Lock()  # serialize terminal callbacks
-        n_workers = min(16, (os.cpu_count() or 4) * 2)
+        n_workers = min(32, (os.cpu_count() or 4) * 4)
 
         def _worker(file_path: str) -> tuple[int, float]:
             t0 = time.time()
