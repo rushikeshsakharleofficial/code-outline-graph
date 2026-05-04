@@ -73,7 +73,7 @@ code-outline-graph build .
 
 ## MCP Tools
 
-The server exposes 9 tools to AI assistants:
+The server exposes 10 tools to AI assistants:
 
 | Tool | Description |
 |------|-------------|
@@ -86,6 +86,7 @@ The server exposes 9 tools to AI assistants:
 | `find_by_keyword` | Keyword search across all symbol names |
 | `get_line_range` | Read arbitrary line slice from a file |
 | `index_project` | Index a directory and start file watcher |
+| `update_project` | Reindex only changed files (faster than `index_project`) |
 
 ### Confirm-Before-Read Protocol
 
@@ -101,7 +102,27 @@ The server exposes 9 tools to AI assistants:
 
 ## Supported Languages
 
-Python, JavaScript, TypeScript, TSX, Go, Rust, Java, C, C++, C#, Ruby, PHP, Swift, Kotlin, JSON, YAML, TOML, INI
+50+ languages and formats — symbols extracted where applicable, files tracked for all others.
+
+**Systems & Backend**
+Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, C, C++, C#, Kotlin, Swift, Dart, Scala, Groovy, Zig, Lua
+
+**Web & Frontend**
+HTML, CSS, SCSS, Sass, Less, Vue, Svelte
+
+**Shell & Scripting**
+Bash/Zsh (`.sh`/`.bash`/`.zsh`), Fish, PowerShell, Batch/CMD, Perl, R
+
+**Functional**
+Elixir, Erlang, Haskell, OCaml, Clojure/ClojureScript, Nix
+
+**Data & Config**
+JSON, YAML, TOML, INI/CFG, XML, PLIST, SQL, SQLite (`.db` — tables/views), CSV
+
+**Infrastructure & Build**
+Terraform/HCL, Protobuf, GraphQL, Makefile, Dockerfile
+
+**Mac / Windows system files** (`.DS_Store`, `.exe`, `.dll`, `.lnk`, etc.) are binary and are skipped automatically.
 
 ## Architecture
 
