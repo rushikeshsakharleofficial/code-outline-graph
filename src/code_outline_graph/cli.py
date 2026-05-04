@@ -238,31 +238,12 @@ def cmd_build(args):
     print(f"[1/7] Indexing {path} ...")
     _db, indexer, db_path = _get_db_indexer(path)
 
-    # Pre-scan: count total indexable files using the same exclusion logic as index_project
-    from .parser import detect_language as _detect_language
-    try:
-        import gitignore_parser as _gip
-        _gitignore_path = os.path.join(path, ".gitignore")
-        if os.path.exists(_gitignore_path):
-            _matches = _gip.parse_gitignore(_gitignore_path)
-        else:
-            _matches = lambda p: False
-    except ImportError:
-        _matches = lambda p: False
-
+    # Fast pre-scan: count all files (upper bound) without calling detect_language
+    _SKIP_DIRS = {"node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"}
     _total = 0
-    for _root, _dirs, _files in os.walk(path):
-        _dirs[:] = [d for d in _dirs if not d.startswith(".") and d not in (
-            "node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"
-        )]
-        for _fname in _files:
-            _full = os.path.join(_root, _fname)
-            if _fname in (".env", ".env.local", ".env.production", ".env.development"):
-                continue
-            if _matches(_full):
-                continue
-            if _detect_language(_full):
-                _total += 1
+    for _r, _ds, _fs in os.walk(path):
+        _ds[:] = [d for d in _ds if not d.startswith(".") and d not in _SKIP_DIRS]
+        _total += len(_fs)
 
     _BAR_WIDTH = 20
     _term_width = max(40, shutil.get_terminal_size((120, 24)).columns - 1)

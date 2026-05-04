@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import time
 import hashlib
 import threading
 from .db import Database
 from .parser import SymbolParser, detect_language
+
+_thread_local = threading.local()
+
+
+def _get_thread_parser() -> SymbolParser:
+    if not hasattr(_thread_local, "parser"):
+        _thread_local.parser = SymbolParser()
+    return _thread_local.parser
 
 
 def compute_checksum(file_path: str) -> str:
@@ -36,7 +45,7 @@ class Indexer:
             return 0
         checksum = compute_checksum(file_path)
         language = detect_language(file_path) or "unknown"
-        symbols = self.parser.parse_file(file_path)
+        symbols = _get_thread_parser().parse_file(file_path)
         for s in symbols:
             s.checksum = checksum
         self.db.insert_symbols(symbols, file_path, checksum, language)
@@ -114,11 +123,6 @@ class Indexer:
     def index_project(self, project_path: str, on_file=None, on_skip=None) -> dict:
         """Walk project directory and index all supported files."""
         try:
-            os.nice(10)  # lower priority — don't spike user's CPU
-        except (AttributeError, OSError):
-            pass  # Windows or permission denied
-
-        try:
             import gitignore_parser
             gitignore_path = os.path.join(project_path, ".gitignore")
             if os.path.exists(gitignore_path):
@@ -128,14 +132,18 @@ class Indexer:
         except ImportError:
             matches = lambda p: False
 
+        _SECRET = frozenset({".env", ".env.local", ".env.production", ".env.development"})
+        _SKIP_DIRS = frozenset({"node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"})
+
         stats = {"files": 0, "symbols": 0, "skipped": 0, "errors": 0}
+
+        # Phase 1: walk serially — skip callbacks must stay on main thread
+        indexable: list[str] = []
         for root, dirs, files in os.walk(project_path):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
-                "node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"
-            )]
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _SKIP_DIRS]
             for fname in files:
                 full = os.path.join(root, fname)
-                if fname in (".env", ".env.local", ".env.production", ".env.development"):
+                if fname in _SECRET:
                     stats["skipped"] += 1
                     if on_skip is not None:
                         on_skip(full, "secret file")
@@ -145,22 +153,34 @@ class Indexer:
                     if on_skip is not None:
                         on_skip(full, "gitignored")
                     continue
-                if not detect_language(full):
-                    continue
-                t0 = time.time()
+                if detect_language(full):
+                    indexable.append(full)
+
+        # Phase 2: parse + store in parallel; DB writes are already lock-protected
+        _cb_lock = threading.Lock()  # serialize terminal callbacks
+        n_workers = min(16, (os.cpu_count() or 4) * 2)
+
+        def _worker(file_path: str) -> tuple[int, float]:
+            t0 = time.time()
+            count = self.index_file(file_path, embed=False)
+            return count, (time.time() - t0) * 1000
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
+            future_map = {pool.submit(_worker, f): f for f in indexable}
+            for fut in concurrent.futures.as_completed(future_map):
+                full = future_map[fut]
                 try:
-                    # embed=False: skip per-file embedding; batch at end instead
-                    count = self.index_file(full, embed=False)
-                    elapsed_ms = (time.time() - t0) * 1000
+                    count, elapsed_ms = fut.result()
                     stats["files"] += 1
                     stats["symbols"] += count
                     if on_file is not None:
-                        on_file(full, count, elapsed_ms)
+                        with _cb_lock:
+                            on_file(full, count, elapsed_ms)
                 except Exception as e:
-                    elapsed_ms = (time.time() - t0) * 1000
                     stats["errors"] += 1
                     if on_file is not None:
-                        on_file(full, 0, elapsed_ms, error=str(e))
+                        with _cb_lock:
+                            on_file(full, 0, 0, error=str(e))
 
         # Embed in background — don't block return on large codebases
         if self._embed_thread and self._embed_thread.is_alive():
