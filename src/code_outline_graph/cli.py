@@ -265,12 +265,13 @@ def cmd_build(args):
                 _total += 1
 
     _BAR_WIDTH = 20
+    _term_width = max(40, shutil.get_terminal_size((120, 24)).columns - 1)
     _dir_stats = {}       # rel_dir -> {"files": int, "symbols": int}
     _start_time = _time.time()
     _live_stats = {"files": 0, "symbols": 0, "errors": 0}
 
     def _print_msg(msg):
-        sys.stderr.write("\r" + " " * 130 + "\r")  # clear bar line
+        sys.stderr.write("\r" + " " * _term_width + "\r")  # clear bar line
         sys.stderr.write(msg + "\n")
         sys.stderr.flush()
 
@@ -281,7 +282,8 @@ def cmd_build(args):
         bar = "█" * filled + "░" * (_BAR_WIDTH - filled)
         basename = os.path.basename(file_path) if file_path else ""
         line = f"      [{bar}] {pct:3d}%  {current} files · {live_stats['symbols']} symbols  →  {basename}"
-        sys.stderr.write(line.ljust(130) + "\r")
+        line = line[:_term_width]
+        sys.stderr.write(line.ljust(_term_width) + "\r")
         sys.stderr.flush()
 
     def _on_file(full_path, symbol_count, elapsed_ms, error=None):
@@ -309,7 +311,8 @@ def cmd_build(args):
     # Print final completed bar (100%, Done!)
     bar = "█" * _BAR_WIDTH
     final_line = f"      [{bar}] 100%  {stats['files']} files · {stats['symbols']} symbols  →  Done!"
-    sys.stderr.write(final_line.ljust(130) + "\n")
+    final_line = final_line[:_term_width]
+    sys.stderr.write(final_line.ljust(_term_width) + "\n")
     sys.stderr.flush()
 
     elapsed_index = _time.time() - _start_time
