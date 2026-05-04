@@ -54,7 +54,7 @@ class Indexer:
         except Exception:
             pass  # embeddings are optional enhancement — never crash indexing
 
-    def index_project(self, project_path: str) -> dict:
+    def index_project(self, project_path: str, on_file=None) -> dict:
         """Walk project directory and index all supported files."""
         try:
             import gitignore_parser
@@ -85,6 +85,8 @@ class Indexer:
                     count = self.index_file(full)
                     stats["files"] += 1
                     stats["symbols"] += count
+                    if on_file is not None:
+                        on_file(full, count, stats)
                 except Exception:
                     stats["skipped"] += 1
         return stats

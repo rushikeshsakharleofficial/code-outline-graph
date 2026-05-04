@@ -193,8 +193,62 @@ def cmd_build(args):
 
     print(f"\n[1/7] Indexing {path}...")
     _db, indexer, db_path = _get_db_indexer(path)
-    stats = indexer.index_project(path)
-    print(f"      Done: {stats['files']} files, {stats['symbols']} symbols, {stats['skipped']} skipped")
+
+    # Pre-scan: count total indexable files using the same exclusion logic as index_project
+    from .parser import detect_language as _detect_language
+    try:
+        import gitignore_parser as _gip
+        _gitignore_path = os.path.join(path, ".gitignore")
+        if os.path.exists(_gitignore_path):
+            _matches = _gip.parse_gitignore(_gitignore_path)
+        else:
+            _matches = lambda p: False
+    except ImportError:
+        _matches = lambda p: False
+
+    _total = 0
+    for _root, _dirs, _files in os.walk(path):
+        _dirs[:] = [d for d in _dirs if not d.startswith(".") and d not in (
+            "node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"
+        )]
+        for _fname in _files:
+            _full = os.path.join(_root, _fname)
+            if _fname in (".env", ".env.local", ".env.production", ".env.development"):
+                continue
+            if _matches(_full):
+                continue
+            if _detect_language(_full):
+                _total += 1
+
+    _BAR_WIDTH = 20
+
+    def _render_bar(file_path, stats):
+        current = stats["files"]
+        total = _total
+        if total > 0:
+            filled = int(_BAR_WIDTH * current / total)
+            pct = int(100 * current / total)
+        else:
+            filled = _BAR_WIDTH
+            pct = 100
+        bar = "█" * filled + "░" * (_BAR_WIDTH - filled)
+        basename = os.path.basename(file_path)
+        line = f"      [{bar}] {pct:3d}%  {current} files · {stats['symbols']} symbols  →  {basename}"
+        sys.stderr.write(line.ljust(120) + "\r")
+        sys.stderr.flush()
+
+    def _on_file(full_path, symbols_indexed, stats):
+        _render_bar(full_path, stats)
+
+    stats = indexer.index_project(path, on_file=_on_file)
+
+    # Print final completed bar, then move past it
+    bar = "█" * _BAR_WIDTH
+    final_line = f"      [{bar}] 100%  {stats['files']} files · {stats['symbols']} symbols  →  Done!"
+    sys.stderr.write(final_line.ljust(120) + "\n")
+    sys.stderr.flush()
+    if stats["skipped"]:
+        print(f"      Skipped: {stats['skipped']} files")
     print(f"      DB: {db_path}")
 
     print("\n[2/7] Writing Claude Code / Cursor MCP config (.mcp.json)...")
