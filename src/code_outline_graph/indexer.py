@@ -1,4 +1,5 @@
 import os
+import time
 import hashlib
 from .db import Database
 from .parser import SymbolParser, detect_language
@@ -54,7 +55,7 @@ class Indexer:
         except Exception:
             pass  # embeddings are optional enhancement — never crash indexing
 
-    def index_project(self, project_path: str, on_file=None) -> dict:
+    def index_project(self, project_path: str, on_file=None, on_skip=None) -> dict:
         """Walk project directory and index all supported files."""
         try:
             import gitignore_parser
@@ -66,7 +67,7 @@ class Indexer:
         except ImportError:
             matches = lambda p: False
 
-        stats = {"files": 0, "symbols": 0, "skipped": 0}
+        stats = {"files": 0, "symbols": 0, "skipped": 0, "errors": 0}
         for root, dirs, files in os.walk(project_path):
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
                 "node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"
@@ -75,20 +76,29 @@ class Indexer:
                 full = os.path.join(root, fname)
                 if fname in (".env", ".env.local", ".env.production", ".env.development"):
                     stats["skipped"] += 1
+                    if on_skip is not None:
+                        on_skip(full, "secret file")
                     continue
                 if matches(full):
                     stats["skipped"] += 1
+                    if on_skip is not None:
+                        on_skip(full, "gitignored")
                     continue
                 if not detect_language(full):
                     continue
+                t0 = time.time()
                 try:
                     count = self.index_file(full)
+                    elapsed_ms = (time.time() - t0) * 1000
                     stats["files"] += 1
                     stats["symbols"] += count
                     if on_file is not None:
-                        on_file(full, count, stats)
-                except Exception:
-                    stats["skipped"] += 1
+                        on_file(full, count, elapsed_ms)
+                except Exception as e:
+                    elapsed_ms = (time.time() - t0) * 1000
+                    stats["errors"] += 1
+                    if on_file is not None:
+                        on_file(full, 0, elapsed_ms, error=str(e))
         return stats
 
     def ensure_fresh(self, file_path: str):

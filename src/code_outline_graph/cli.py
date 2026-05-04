@@ -46,7 +46,7 @@ def _upsert_instruction_block(project_path: str, filename: str) -> None:
             content = _AI_INSTRUCTION_BLOCK + "\n"
         with open(file_path, "w") as f:
             f.write(content)
-        print(f"Instructions written to {file_path}")
+        print(f"Instructions written to {file_path}  ✓")
     except Exception as e:
         print(f"Warning: could not write {filename}: {e}", file=sys.stderr)
 
@@ -68,7 +68,7 @@ def _write_codex_config(project_path: str) -> None:
             content = entry
         with open(config_path, "w") as f:
             f.write(content)
-        print(f"Codex MCP config written to {config_path}")
+        print(f"Codex MCP config written to {config_path}  ✓")
     except Exception as e:
         print(f"Warning: could not write .codex/config.toml: {e}", file=sys.stderr)
 
@@ -102,7 +102,7 @@ def _write_codex_hooks(project_path: str) -> None:
                 config["hooks"][event].append(entry)
         with open(hooks_path, "w") as f:
             json.dump(config, f, indent=2)
-        print(f"Codex hooks written to {hooks_path}")
+        print(f"Codex hooks written to {hooks_path}  ✓")
     except Exception as e:
         print(f"Warning: could not write .codex/hooks.json: {e}", file=sys.stderr)
 
@@ -138,7 +138,7 @@ def _write_gemini_config(project_path: str) -> None:
                 config["hooks"][event].append(entry)
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
-        print(f"Gemini MCP config + hooks written to {config_path}")
+        print(f"Gemini MCP config + hooks written to {config_path}  ✓")
     except Exception as e:
         print(f"Warning: could not write .gemini/settings.json: {e}", file=sys.stderr)
 
@@ -173,7 +173,7 @@ def _write_claude_hooks(project_path: str) -> None:
                 config["hooks"][event].append(entry)
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
-        print(f"Claude Code hooks written to {config_path}")
+        print(f"Claude Code hooks written to {config_path}  ✓")
     except Exception as e:
         print(f"Warning: could not write .claude/settings.json: {e}", file=sys.stderr)
 
@@ -189,9 +189,17 @@ def _get_db_indexer(project_path: str | None = None):
 
 
 def cmd_build(args):
+    import time as _time
+
     path = resolve_project_path(args.path or ".")
 
-    print(f"\n[1/7] Indexing {path}...")
+    # Header box
+    print("╔══════════════════════════════════════════════════════════╗")
+    print("║         code-outline-graph  •  Building Index            ║")
+    print("╚══════════════════════════════════════════════════════════╝")
+    print()
+
+    print(f"[1/7] Indexing {path} ...")
     _db, indexer, db_path = _get_db_indexer(path)
 
     # Pre-scan: count total indexable files using the same exclusion logic as index_project
@@ -221,34 +229,63 @@ def cmd_build(args):
                 _total += 1
 
     _BAR_WIDTH = 20
+    _dir_stats = {}       # rel_dir -> {"files": int, "symbols": int}
+    _start_time = _time.time()
+    _live_stats = {"files": 0, "symbols": 0, "errors": 0}
 
-    def _render_bar(file_path, stats):
-        current = stats["files"]
-        total = _total
-        if total > 0:
-            filled = int(_BAR_WIDTH * current / total)
-            pct = int(100 * current / total)
-        else:
-            filled = _BAR_WIDTH
-            pct = 100
-        bar = "█" * filled + "░" * (_BAR_WIDTH - filled)
-        basename = os.path.basename(file_path)
-        line = f"      [{bar}] {pct:3d}%  {current} files · {stats['symbols']} symbols  →  {basename}"
-        sys.stderr.write(line.ljust(120) + "\r")
+    def _print_msg(msg):
+        sys.stderr.write("\r" + " " * 130 + "\r")  # clear bar line
+        sys.stderr.write(msg + "\n")
         sys.stderr.flush()
 
-    def _on_file(full_path, symbols_indexed, stats):
-        _render_bar(full_path, stats)
+    def _render_bar(file_path, live_stats):
+        current = live_stats["files"]
+        pct = int(100 * current / _total) if _total > 0 else 100
+        filled = int(_BAR_WIDTH * pct / 100)
+        bar = "█" * filled + "░" * (_BAR_WIDTH - filled)
+        basename = os.path.basename(file_path) if file_path else ""
+        line = f"      [{bar}] {pct:3d}%  {current} files · {live_stats['symbols']} symbols  →  {basename}"
+        sys.stderr.write(line.ljust(130) + "\r")
+        sys.stderr.flush()
 
-    stats = indexer.index_project(path, on_file=_on_file)
+    def _on_file(full_path, symbol_count, elapsed_ms, error=None):
+        d = os.path.dirname(full_path)
+        rel = os.path.relpath(d, path)
+        _dir_stats.setdefault(rel, {"files": 0, "symbols": 0})
+        if error is None:
+            _live_stats["files"] += 1
+            _live_stats["symbols"] += symbol_count
+            _dir_stats[rel]["files"] += 1
+            _dir_stats[rel]["symbols"] += symbol_count
+            ok_msg = f"      OK     {os.path.relpath(full_path, path):<40}  {symbol_count} symbols   {elapsed_ms/1000:.2f}s"
+            _print_msg(ok_msg)
+        else:
+            _live_stats["errors"] += 1
+            warn_msg = f"      WARN   {os.path.relpath(full_path, path):<40}  {error[:60]}"
+            _print_msg(warn_msg)
+        _render_bar(full_path, _live_stats)
 
-    # Print final completed bar, then move past it
+    def _on_skip(full_path, reason):
+        skip_msg = f"      SKIP   {os.path.relpath(full_path, path):<40}  ({reason})"
+        _print_msg(skip_msg)
+        _render_bar("", _live_stats)
+
+    stats = indexer.index_project(path, on_file=_on_file, on_skip=_on_skip)
+
+    # Print final completed bar (100%, Done!)
     bar = "█" * _BAR_WIDTH
     final_line = f"      [{bar}] 100%  {stats['files']} files · {stats['symbols']} symbols  →  Done!"
-    sys.stderr.write(final_line.ljust(120) + "\n")
+    sys.stderr.write(final_line.ljust(130) + "\n")
     sys.stderr.flush()
-    if stats["skipped"]:
-        print(f"      Skipped: {stats['skipped']} files")
+
+    elapsed_index = _time.time() - _start_time
+    skipped_line = f"      Skipped: {stats['skipped']}  •  Errors: {stats.get('errors', 0)}  •  Time: {elapsed_index:.1f}s"
+    print(skipped_line)
+
+    # Dir summaries
+    for rel_dir, ds in sorted(_dir_stats.items()):
+        print(f"      {rel_dir:<20}  →  {ds['files']:>3} files   {ds['symbols']:>5} symbols")
+
     print(f"      DB: {db_path}")
 
     print("\n[2/7] Writing Claude Code / Cursor MCP config (.mcp.json)...")
@@ -263,7 +300,7 @@ def cmd_build(args):
         config["mcpServers"]["code-outline"] = {"command": "code-outline-graph", "args": ["serve", path]}
         with open(mcp_path, "w") as f:
             json.dump(config, f, indent=2)
-        print(f"      Written: {mcp_path}")
+        print(f"      Written: {mcp_path}  ✓")
     except Exception as e:
         print(f"      Warning: could not write .mcp.json: {e}", file=sys.stderr)
 
@@ -284,7 +321,13 @@ def cmd_build(args):
     print("\n[7/7] Installing Claude Code skill...")
     cmd_install_skill(None)
 
-    print("\nBuild complete. All AI clients configured.")
+    # Footer box
+    _total_elapsed = _time.time() - _start_time
+    print()
+    print("══════════════════════════════════════════════════════════")
+    print(f"  Build complete in {_total_elapsed:.1f}s")
+    print(f"  {stats['files']} files  •  {stats['symbols']} symbols  •  {stats['skipped']} skipped  •  {stats.get('errors', 0)} errors")
+    print("══════════════════════════════════════════════════════════")
 
 
 def cmd_update(args):
@@ -383,7 +426,7 @@ def cmd_install_skill(_args):
         src = os.path.join(skill_src_dir, fname)
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(skill_dest_dir, fname))
-            print(f"Installed: {fname} → {skill_dest_dir}/")
+            print(f"Installed: {fname} → {skill_dest_dir}/  ✓")
     print(f"Skill installed to {skill_dest_dir}")
 
 
