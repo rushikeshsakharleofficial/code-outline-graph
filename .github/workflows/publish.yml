@@ -7,9 +7,6 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write  # required for trusted publishing
 
     steps:
       - uses: actions/checkout@v4
@@ -21,8 +18,31 @@ jobs:
       - name: Install build
         run: pip install build
 
+      - name: Auto-bump patch version
+        run: |
+          python - <<'EOF'
+          import re, pathlib
+          p = pathlib.Path("pyproject.toml")
+          content = p.read_text()
+          match = re.search(r'version = "(\d+)\.(\d+)\.(\d+)"', content)
+          major, minor, patch = match.groups()
+          new_version = f'{major}.{minor}.{int(patch)+1}'
+          p.write_text(content.replace(match.group(0), f'version = "{new_version}"'))
+          print(f"Bumped to {new_version}")
+          EOF
+
+      - name: Commit bumped version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git diff --cached --quiet || git commit -m "chore: auto-bump patch version [skip ci]"
+          git push
+
       - name: Build package
         run: python -m build
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
