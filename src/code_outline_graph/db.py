@@ -155,6 +155,84 @@ class Database:
                     (file_path, checksum, len(symbols), language, now),
                 )
 
+    _TRIGGER_SQL = """
+        CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
+          INSERT INTO symbols_fts(rowid, name, kind, file_path, signature, docstring)
+          VALUES (new.id, new.name, new.kind, new.file_path, new.signature, new.docstring);
+        END;
+        CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
+          INSERT INTO symbols_fts(symbols_fts, rowid, name, kind, file_path, signature, docstring)
+          VALUES ('delete', old.id, old.name, old.kind, old.file_path, old.signature, old.docstring);
+        END;
+        CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
+          INSERT INTO symbols_fts(symbols_fts, rowid, name, kind, file_path, signature, docstring)
+          VALUES ('delete', old.id, old.name, old.kind, old.file_path, old.signature, old.docstring);
+          INSERT INTO symbols_fts(rowid, name, kind, file_path, signature, docstring)
+          VALUES (new.id, new.name, new.kind, new.file_path, new.signature, new.docstring);
+        END;
+    """
+
+    def bulk_insert_all(
+        self,
+        file_results: list[tuple],  # [(symbols, file_path, checksum, language), ...]
+        chunk_size: int = 2000,
+    ) -> None:
+        """Write all parsed results as fast as possible.
+
+        Disables FTS triggers during inserts, commits in chunks to bound
+        memory, then rebuilds FTS once and recreates triggers.
+        """
+        with self._lock:
+            self.conn.execute("DROP TRIGGER IF EXISTS symbols_ai")
+            self.conn.execute("DROP TRIGGER IF EXISTS symbols_ad")
+            self.conn.execute("DROP TRIGGER IF EXISTS symbols_au")
+            self.conn.commit()
+            try:
+                now = int(time.time())
+                for i in range(0, len(file_results), chunk_size):
+                    chunk = file_results[i : i + chunk_size]
+                    with self.conn:
+                        for symbols, file_path, checksum, language in chunk:
+                            self.conn.execute(
+                                "DELETE FROM vec_symbols WHERE symbol_id IN "
+                                "(SELECT id FROM symbols WHERE file_path=?)",
+                                (file_path,),
+                            )
+                            self.conn.execute(
+                                "DELETE FROM symbols WHERE file_path=?", (file_path,)
+                            )
+                            if symbols:
+                                self.conn.executemany(
+                                    "INSERT INTO symbols (name, kind, file_path, start_line,"
+                                    " end_line, signature, docstring, parent_name, parent_id,"
+                                    " language, checksum, indexed_at)"
+                                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                                    [
+                                        (
+                                            s.name, s.kind, s.file_path,
+                                            s.start_line, s.end_line, s.signature,
+                                            s.docstring, s.parent_name, s.parent_id,
+                                            s.language, s.checksum, now,
+                                        )
+                                        for s in symbols
+                                    ],
+                                )
+                            self.conn.execute(
+                                "INSERT INTO indexed_files"
+                                " (file_path, checksum, git_head, symbol_count, language, indexed_at)"
+                                " VALUES (?,?,NULL,?,?,?)"
+                                " ON CONFLICT(file_path) DO UPDATE SET"
+                                " checksum=excluded.checksum, symbol_count=excluded.symbol_count,"
+                                " language=excluded.language, indexed_at=excluded.indexed_at",
+                                (file_path, checksum, len(symbols), language, now),
+                            )
+                # Rebuild FTS once from the content table
+                self.conn.execute("INSERT INTO symbols_fts(symbols_fts) VALUES('rebuild')")
+                self.conn.commit()
+            finally:
+                self.conn.executescript(self._TRIGGER_SQL)
+                self.conn.commit()
+
     def delete_symbols_for_file(self, file_path: str) -> None:
         with self._lock:
             with self.conn:

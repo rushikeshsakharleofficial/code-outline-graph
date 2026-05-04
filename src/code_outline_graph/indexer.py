@@ -162,31 +162,46 @@ class Indexer:
                 if detect_language(full):
                     indexable.append(full)
 
-        # Phase 2: parse + store in parallel; DB writes are already lock-protected
-        _cb_lock = threading.Lock()  # serialize terminal callbacks
+        # Phase 2: parse all files in parallel — no DB writes yet, no lock contention
+        _cb_lock = threading.Lock()
         n_workers = min(32, (os.cpu_count() or 4) * 4)
+        parse_results: list[tuple] = []  # (symbols, file_path, checksum, language)
 
-        def _worker(file_path: str) -> tuple[int, float]:
+        def _parse_only(file_path: str):
+            lang = detect_language(file_path) or "unknown"
             t0 = time.time()
-            count = self.index_file(file_path, embed=False)
-            return count, (time.time() - t0) * 1000
+            if lang != "sqlite":
+                source = open(file_path, "rb").read()
+                checksum = hashlib.blake2b(source, digest_size=16).hexdigest()
+                symbols = _get_thread_parser().parse_file(file_path, source=source)
+            else:
+                checksum = compute_checksum(file_path)
+                symbols = _get_thread_parser().parse_file(file_path)
+            for s in symbols:
+                s.checksum = checksum
+            return symbols, checksum, lang, (time.time() - t0) * 1000
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
-            future_map = {pool.submit(_worker, f): f for f in indexable}
+            future_map = {pool.submit(_parse_only, f): f for f in indexable}
             for fut in concurrent.futures.as_completed(future_map):
                 full = future_map[fut]
                 try:
-                    count, elapsed_ms = fut.result()
+                    symbols, checksum, lang, elapsed_ms = fut.result()
+                    parse_results.append((symbols, full, checksum, lang))
                     stats["files"] += 1
-                    stats["symbols"] += count
+                    stats["symbols"] += len(symbols)
                     if on_file is not None:
                         with _cb_lock:
-                            on_file(full, count, elapsed_ms)
+                            on_file(full, len(symbols), elapsed_ms)
                 except Exception as e:
                     stats["errors"] += 1
                     if on_file is not None:
                         with _cb_lock:
                             on_file(full, 0, 0, error=str(e))
+
+        # Phase 3: bulk-write all results — one transaction per 2000 files,
+        # FTS triggers disabled, FTS rebuilt once at the end
+        self.db.bulk_insert_all(parse_results)
 
         # Embed in background — don't block return on large codebases
         if self._embed_thread and self._embed_thread.is_alive():
