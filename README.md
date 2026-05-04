@@ -37,8 +37,10 @@ code-outline-graph build .
       [████████████████████] 100%  186 files · 1789 symbols  →  Done!
       Skipped: 1  •  Errors: 1  •  Time: 3.2s
 
-[2/7] Writing Claude Code / Cursor MCP config (.mcp.json) ...
+[2/7] Writing MCP configs (Claude/Cursor/Antigravity) ...
       Written: /home/user/myproject/.mcp.json  ✓
+      Written: /home/user/myproject/.cursor/mcp.json  ✓
+      Written: /home/user/.gemini/antigravity/mcp_config.json  ✓
 [3/7] Writing Codex CLI config + hooks ...
       Written: .codex/config.toml  ✓
       Written: .codex/hooks.json   ✓
@@ -146,7 +148,9 @@ Each project gets its own SQLite DB at `~/.cache/code-outline-graph/<hash>/vecto
 
 | Client | MCP config | SessionStart hook |
 |--------|-----------|-------------------|
-| Claude Code / Cursor | `.mcp.json` | `.claude/settings.json` |
+| Claude Code | `.mcp.json` | `.claude/settings.json` |
+| Cursor | `.cursor/mcp.json` | none |
+| Antigravity | `~/.gemini/antigravity/mcp_config.json` | none |
 | Codex CLI | `.codex/config.toml` | `.codex/hooks.json` |
 | Gemini CLI | `.gemini/settings.json` | `.gemini/settings.json` |
 

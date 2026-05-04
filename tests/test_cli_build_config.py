@@ -29,15 +29,28 @@ def test_build_uses_project_db_and_writes_project_aware_mcp_config(workspace_tmp
 
     monkeypatch.setattr(cli, "_get_db_indexer", fake_get_db_indexer)
     monkeypatch.setattr(cli, "cmd_install_skill", lambda _args: None)
+    antigravity_path = workspace_tmp / "antigravity" / "mcp_config.json"
+    monkeypatch.setattr(cli, "_antigravity_mcp_config_path", lambda: str(antigravity_path))
 
     cli.cmd_build(SimpleNamespace(path=str(workspace_tmp)))
 
     project_path = str(workspace_tmp)
     config = json.loads((workspace_tmp / ".mcp.json").read_text())
+    cursor_config = json.loads((workspace_tmp / ".cursor" / "mcp.json").read_text())
+    antigravity_config = json.loads(antigravity_path.read_text())
 
     assert calls["project_path"] == project_path
     assert fake_indexer.indexed_path == project_path
     assert config["mcpServers"]["code-outline"] == {
+        "command": "code-outline-graph",
+        "args": ["serve", project_path],
+    }
+    assert cursor_config["mcpServers"]["code-outline"] == {
+        "command": "code-outline-graph",
+        "args": ["serve", project_path],
+        "type": "stdio",
+    }
+    assert antigravity_config["mcpServers"]["code-outline"] == {
         "command": "code-outline-graph",
         "args": ["serve", project_path],
     }
@@ -52,16 +65,43 @@ def test_build_preserves_existing_mcp_servers(workspace_tmp, monkeypatch):
             },
         },
     }))
+    cursor_path = workspace_tmp / ".cursor" / "mcp.json"
+    cursor_path.parent.mkdir()
+    cursor_path.write_text(json.dumps({
+        "mcpServers": {
+            "cursor-other": {
+                "command": "cursor-tool",
+                "args": ["serve"],
+            },
+        },
+    }))
+    antigravity_path = workspace_tmp / "antigravity" / "mcp_config.json"
+    antigravity_path.parent.mkdir()
+    antigravity_path.write_text(json.dumps({
+        "mcpServers": {
+            "antigravity-other": {
+                "command": "anti-tool",
+                "args": ["serve"],
+            },
+        },
+    }))
 
     def fake_get_db_indexer(project_path):
         return object(), FakeIndexer(), str(Path(project_path) / ".code-outline-graph" / "index.db")
 
     monkeypatch.setattr(cli, "_get_db_indexer", fake_get_db_indexer)
     monkeypatch.setattr(cli, "cmd_install_skill", lambda _args: None)
+    monkeypatch.setattr(cli, "_antigravity_mcp_config_path", lambda: str(antigravity_path))
 
     cli.cmd_build(SimpleNamespace(path=str(workspace_tmp)))
 
     config = json.loads((workspace_tmp / ".mcp.json").read_text())
+    cursor_config = json.loads(cursor_path.read_text())
+    antigravity_config = json.loads(antigravity_path.read_text())
 
     assert config["mcpServers"]["other"]["command"] == "other-tool"
     assert config["mcpServers"]["code-outline"]["args"] == ["serve", str(workspace_tmp)]
+    assert cursor_config["mcpServers"]["cursor-other"]["command"] == "cursor-tool"
+    assert cursor_config["mcpServers"]["code-outline"]["type"] == "stdio"
+    assert antigravity_config["mcpServers"]["antigravity-other"]["command"] == "anti-tool"
+    assert antigravity_config["mcpServers"]["code-outline"]["args"] == ["serve", str(workspace_tmp)]

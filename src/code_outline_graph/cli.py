@@ -55,6 +55,62 @@ def _upsert_instruction_block(project_path: str, filename: str) -> None:
         print(f"Warning: could not write {filename}: {e}", file=sys.stderr)
 
 
+def _stdio_server_config(project_path: str, include_type: bool = False) -> dict:
+    config = {"command": "code-outline-graph", "args": ["serve", project_path]}
+    if include_type:
+        config["type"] = "stdio"
+    return config
+
+
+def _write_mcp_json_config(
+    config_path: str,
+    server_config: dict,
+    label: str,
+) -> None:
+    try:
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                config = json.load(f)
+        else:
+            config = {}
+        config.setdefault("mcpServers", {})
+        config["mcpServers"]["code-outline"] = server_config
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+        print(f"      Written: {config_path}  ✓")
+    except Exception as e:
+        print(f"      Warning: could not write {label}: {e}", file=sys.stderr)
+
+
+def _write_project_mcp_config(project_path: str) -> None:
+    _write_mcp_json_config(
+        os.path.join(project_path, ".mcp.json"),
+        _stdio_server_config(project_path),
+        ".mcp.json",
+    )
+
+
+def _write_cursor_config(project_path: str) -> None:
+    _write_mcp_json_config(
+        os.path.join(project_path, ".cursor", "mcp.json"),
+        _stdio_server_config(project_path, include_type=True),
+        ".cursor/mcp.json",
+    )
+
+
+def _antigravity_mcp_config_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "mcp_config.json")
+
+
+def _write_antigravity_config(project_path: str) -> None:
+    _write_mcp_json_config(
+        _antigravity_mcp_config_path(),
+        _stdio_server_config(project_path),
+        "Antigravity mcp_config.json",
+    )
+
+
 def _write_codex_config(project_path: str) -> None:
     codex_dir = os.path.join(project_path, ".codex")
     config_path = os.path.join(codex_dir, "config.toml")
@@ -314,21 +370,10 @@ def cmd_build(args):
 
     print(f"      DB: {db_path}")
 
-    print("\n[2/7] Writing Claude Code / Cursor MCP config (.mcp.json)...")
-    mcp_path = os.path.join(path, ".mcp.json")
-    try:
-        if os.path.exists(mcp_path):
-            with open(mcp_path) as f:
-                config = json.load(f)
-        else:
-            config = {}
-        config.setdefault("mcpServers", {})
-        config["mcpServers"]["code-outline"] = {"command": "code-outline-graph", "args": ["serve", path]}
-        with open(mcp_path, "w") as f:
-            json.dump(config, f, indent=2)
-        print(f"      Written: {mcp_path}  ✓")
-    except Exception as e:
-        print(f"      Warning: could not write .mcp.json: {e}", file=sys.stderr)
+    print("\n[2/7] Writing MCP configs (Claude/Cursor/Antigravity)...")
+    _write_project_mcp_config(path)
+    _write_cursor_config(path)
+    _write_antigravity_config(path)
 
     print("\n[3/7] Writing Codex CLI config + hooks...")
     _write_codex_config(path)
