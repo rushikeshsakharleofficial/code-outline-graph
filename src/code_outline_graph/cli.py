@@ -262,7 +262,13 @@ def cmd_build(args):
         filled = int(_BAR_WIDTH * pct / 100)
         bar = "█" * filled + "░" * (_BAR_WIDTH - filled)
         basename = os.path.basename(file_path) if file_path else ""
-        line = f"      [{bar}] {pct:3d}%  {current} files · {live_stats['symbols']} symbols  →  {basename}"
+        elapsed = _time.time() - _start_time
+        if current > 0 and _total > current and elapsed > 0:
+            eta_s = int(elapsed / current * (_total - current))
+            eta = f"{eta_s // 60}m {eta_s % 60}s" if eta_s >= 60 else f"{eta_s}s"
+        else:
+            eta = "--"
+        line = f"      [{bar}] {pct:3d}%  {current}/{_total}  {live_stats['symbols']} symbols  ETA {eta}  →  {basename}"
         line = line[:_term_width]
         sys.stderr.write(line.ljust(_term_width) + "\r")
         sys.stderr.flush()
@@ -290,13 +296,13 @@ def cmd_build(args):
     stats = indexer.index_project(path, on_file=_on_file, on_skip=_on_skip)
 
     # Print final completed bar (100%, Done!)
+    elapsed_index = _time.time() - _start_time
     bar = "█" * _BAR_WIDTH
-    final_line = f"      [{bar}] 100%  {stats['files']} files · {stats['symbols']} symbols  →  Done!"
+    final_line = f"      [{bar}] 100%  {stats['files']}/{_total}  {stats['symbols']} symbols  {elapsed_index:.1f}s  →  Done!"
     final_line = final_line[:_term_width]
     sys.stderr.write(final_line.ljust(_term_width) + "\n")
     sys.stderr.flush()
 
-    elapsed_index = _time.time() - _start_time
     skipped_line = f"      Skipped: {stats['skipped']}  •  Errors: {stats.get('errors', 0)}  •  Time: {elapsed_index:.1f}s"
     print(skipped_line)
 
