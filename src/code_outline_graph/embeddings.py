@@ -1,5 +1,7 @@
+import contextlib
 import os
 import struct
+import warnings
 
 _model = None
 
@@ -21,20 +23,45 @@ def _limit_threads():
             os.environ[var] = _THREAD_CAP
 
 
+def _quiet_hf_output():
+    """Disable Hugging Face progress/warnings that corrupt live CLI progress bars."""
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+    warnings.filterwarnings(
+        "ignore",
+        message=".*cache-system uses symlinks.*",
+        module="huggingface_hub.file_download",
+    )
+
+
+@contextlib.contextmanager
+def _suppress_optional_embedding_noise():
+    """Keep optional model download chatter out of scanner progress output."""
+    _quiet_hf_output()
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*cache-system uses symlinks.*",
+            module="huggingface_hub.file_download",
+        )
+        yield
+
+
 def _get_model():
     global _model
     if _model is None:
         _limit_threads()
-        try:
-            from fastembed import TextEmbedding
-            _model = TextEmbedding(
-                model_name="BAAI/bge-small-en-v1.5",
-                threads=int(_THREAD_CAP),
-            )
-        except TypeError:
-            # older fastembed doesn't accept threads= kwarg
-            from fastembed import TextEmbedding
-            _model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+        with _suppress_optional_embedding_noise():
+            try:
+                from fastembed import TextEmbedding
+                _model = TextEmbedding(
+                    model_name="BAAI/bge-small-en-v1.5",
+                    threads=int(_THREAD_CAP),
+                )
+            except TypeError:
+                # older fastembed doesn't accept threads= kwarg
+                from fastembed import TextEmbedding
+                _model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
     return _model
 
 
