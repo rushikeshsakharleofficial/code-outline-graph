@@ -32,6 +32,8 @@ class Indexer:
 
     def index_file(self, file_path: str, embed: bool = True) -> int:
         """Parse and store symbols for one file. Returns symbol count."""
+        if os.path.abspath(file_path) == os.path.abspath(self.db.path):
+            return 0
         checksum = compute_checksum(file_path)
         language = detect_language(file_path) or "unknown"
         symbols = self.parser.parse_file(file_path)

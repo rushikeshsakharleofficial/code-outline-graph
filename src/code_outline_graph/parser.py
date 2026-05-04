@@ -32,13 +32,74 @@ LANGUAGE_MAP: dict[str, str] = {
     ".cfg": "ini",
     ".md": "markdown",
     ".db": "sqlite",
+    # Web
+    ".html": "html",
+    ".htm": "html",
+    ".css": "css",
+    ".scss": "scss",
+    ".sass": "scss",
+    ".less": "less",
+    ".vue": "vue",
+    ".svelte": "svelte",
+    # Systems
+    ".lua": "lua",
+    ".zig": "zig",
+    ".dart": "dart",
+    # Shell
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "bash",
+    ".fish": "fish",
+    ".ps1": "powershell",
+    ".bat": "batch",
+    ".cmd": "batch",
+    # JVM / functional
+    ".scala": "scala",
+    ".groovy": "groovy",
+    ".clj": "clojure",
+    ".cljs": "clojure",
+    ".cljc": "clojure",
+    ".ex": "elixir",
+    ".exs": "elixir",
+    ".erl": "erlang",
+    ".hrl": "erlang",
+    ".hs": "haskell",
+    ".ml": "ocaml",
+    ".mli": "ocaml",
+    # Scripting / data science
+    ".pl": "perl",
+    ".pm": "perl",
+    ".r": "r",
+    ".R": "r",
+    ".nix": "nix",
+    # Data / config / markup
+    ".xml": "xml",
+    ".plist": "xml",
+    ".graphql": "graphql",
+    ".gql": "graphql",
+    ".proto": "proto",
+    ".tf": "hcl",
+    ".hcl": "hcl",
+    ".sql": "sql",
+    # Build / infra
+    ".dockerfile": "dockerfile",
+}
+
+FILENAME_MAP: dict[str, str] = {
+    "Dockerfile": "dockerfile",
+    "Makefile": "make",
+    "makefile": "make",
+    "GNUmakefile": "make",
 }
 
 
 def detect_language(file_path: str) -> Optional[str]:
-    """Return tree-sitter language name for the file extension, or None."""
-    suffix = Path(file_path).suffix
-    return LANGUAGE_MAP.get(suffix)
+    """Return tree-sitter language name for the file, or None."""
+    p = Path(file_path)
+    lang = FILENAME_MAP.get(p.name)
+    if lang:
+        return lang
+    return LANGUAGE_MAP.get(p.suffix)
 
 
 class SymbolParser:
@@ -269,6 +330,149 @@ class SymbolExtractor:
             if t == "setext_heading":
                 return "section"
 
+        elif lang in ("css", "scss", "less"):
+            if t == "rule_set":
+                return "section"
+            if t in ("media_statement", "supports_statement", "keyframes_statement"):
+                return "section"
+            if t == "mixin_statement":
+                return "function"
+
+        elif lang == "html":
+            if t == "element" and node.parent and node.parent.type == "document":
+                return "section"
+
+        elif lang == "lua":
+            if t == "function_declaration":
+                return "function"
+
+        elif lang == "bash":
+            if t == "function_definition":
+                return "function"
+
+        elif lang == "r":
+            if t == "binary_operator":
+                for child in node.children:
+                    if child.type == "function_definition":
+                        return "function"
+
+        elif lang == "scala":
+            if t == "function_definition":
+                return "function"
+            if t in ("class_definition", "object_definition", "trait_definition"):
+                return "class"
+
+        elif lang == "elixir":
+            if t == "call":
+                for child in node.children:
+                    if child.type == "identifier":
+                        if child.text in (b"defmodule", b"defprotocol", b"defimpl"):
+                            return "class"
+                        if child.text in (b"def", b"defp", b"defmacro", b"defmacrop"):
+                            return "function"
+                    break
+
+        elif lang == "erlang":
+            if t == "fun_decl":
+                return "function"
+
+        elif lang == "haskell":
+            if t in ("function", "bind"):
+                return "function"
+
+        elif lang == "ocaml":
+            if t == "value_definition":
+                return "function"
+            if t == "module_definition":
+                return "class"
+
+        elif lang == "dart":
+            if t == "class_definition":
+                return "class"
+            if t == "function_signature":
+                if node.parent and node.parent.type not in ("class_body", "method_signature"):
+                    return "function"
+            if t == "method_signature":
+                return "method"
+
+        elif lang == "hcl":
+            if t == "block":
+                return "section"
+
+        elif lang == "proto":
+            if t == "message":
+                return "class"
+            if t == "service":
+                return "class"
+            if t == "rpc":
+                return "function"
+
+        elif lang == "graphql":
+            if t == "type_system_definition":
+                return "class"
+
+        elif lang == "sql":
+            if t == "create_table":
+                return "class"
+            if t == "create_view":
+                return "class"
+            if t == "create_index":
+                return "variable"
+            if t == "create_function":
+                return "function"
+
+        elif lang == "xml":
+            if t == "element" and node.parent and node.parent.type == "document":
+                return "section"
+
+        elif lang in ("svelte", "vue"):
+            if t in ("script_element", "style_element", "template_element"):
+                return "section"
+
+        elif lang == "powershell":
+            if t == "function_statement":
+                return "function"
+
+        elif lang == "dockerfile":
+            if t == "from_instruction":
+                return "import"
+
+        elif lang == "make":
+            if t == "rule":
+                return "function"
+
+        elif lang == "perl":
+            if t == "subroutine_declaration_statement":
+                return "function"
+            if t == "package_statement":
+                return "class"
+
+        elif lang == "zig":
+            if t == "FnProto":
+                return "function"
+            if t == "VarDecl":
+                return "variable"
+
+        elif lang == "clojure":
+            if t == "list_lit":
+                for child in node.children:
+                    if child.type == "sym_lit":
+                        if child.text in (b"defn", b"defn-", b"defmacro"):
+                            return "function"
+                        if child.text in (b"def", b"defonce"):
+                            return "variable"
+                        if child.text in (b"ns", b"defprotocol", b"deftype", b"defrecord"):
+                            return "class"
+                        break  # stop after first sym_lit
+
+        elif lang == "fish":
+            if t == "function_definition":
+                return "function"
+
+        elif lang == "batch":
+            if t == "function_definition":
+                return "function"
+
         return None
 
     def _has_class_parent(self, node) -> bool:
@@ -430,6 +634,235 @@ class SymbolExtractor:
                     for gc in child.children:
                         if gc.type == "inline":
                             return gc.text.decode("utf-8", errors="replace").strip()
+            return None
+
+        # CSS/SCSS/Less: rule_set → selectors text; at-rules → first line; mixin → identifier
+        if self.language in ("css", "scss", "less"):
+            if t == "rule_set":
+                for child in node.children:
+                    if child.type == "selectors":
+                        return child.text.decode("utf-8", errors="replace").strip()[:80]
+                return None
+            if t in ("media_statement", "keyframes_statement", "supports_statement"):
+                return node.text.decode("utf-8", errors="replace").split("\n")[0].strip()[:80]
+            if t == "mixin_statement":
+                for child in node.children:
+                    if child.type == "identifier":
+                        return child.text.decode("utf-8", errors="replace")
+                return None
+
+        # HTML: element → STag → Name
+        if self.language == "html" and t == "element":
+            for child in node.children:
+                if child.type == "STag":
+                    for gc in child.children:
+                        if gc.type == "Name":
+                            return gc.text.decode("utf-8", errors="replace")
+            return None
+
+        # Bash: function_definition → word child
+        if self.language == "bash" and t == "function_definition":
+            for child in node.children:
+                if child.type == "word":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # Haskell: function/bind → variable child
+        if self.language == "haskell" and t in ("function", "bind"):
+            for child in node.children:
+                if child.type == "variable":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # OCaml: value_definition → let_binding → value_name; module_definition → module_binding → module_name
+        if self.language == "ocaml":
+            if t == "value_definition":
+                for child in node.children:
+                    if child.type == "let_binding":
+                        for gc in child.children:
+                            if gc.type == "value_name":
+                                return gc.text.decode("utf-8", errors="replace")
+                return None
+            if t == "module_definition":
+                for child in node.children:
+                    if child.type == "module_binding":
+                        for gc in child.children:
+                            if gc.type == "module_name":
+                                return gc.text.decode("utf-8", errors="replace")
+                return None
+
+        # Elixir: defmodule → arguments → alias; def/defp → arguments → call → identifier
+        if self.language == "elixir" and t == "call":
+            if not node.children:
+                return None
+            first = node.children[0]
+            if first.type != "identifier":
+                return None
+            macro = first.text
+            for child in node.children:
+                if child.type == "arguments":
+                    if macro in (b"defmodule", b"defprotocol", b"defimpl"):
+                        for ac in child.children:
+                            if ac.type in ("alias", "atom", "identifier"):
+                                return ac.text.decode("utf-8", errors="replace")
+                    elif macro in (b"def", b"defp", b"defmacro", b"defmacrop"):
+                        for ac in child.children:
+                            if ac.type == "call":
+                                for gc in ac.children:
+                                    if gc.type == "identifier":
+                                        return gc.text.decode("utf-8", errors="replace")
+                            if ac.type == "identifier":
+                                return ac.text.decode("utf-8", errors="replace")
+            return None
+
+        # Erlang: fun_decl → function_clause → atom (function name)
+        if self.language == "erlang" and t == "fun_decl":
+            for child in node.children:
+                if child.type == "function_clause":
+                    for gc in child.children:
+                        if gc.type == "atom":
+                            return gc.text.decode("utf-8", errors="replace")
+            return None
+
+        # HCL: block → combine type + string labels (e.g., resource.aws_instance.web)
+        if self.language == "hcl" and t == "block":
+            parts = []
+            for child in node.children:
+                if child.type == "identifier":
+                    parts.append(child.text.decode("utf-8", errors="replace"))
+                elif child.type == "string_lit":
+                    for gc in child.children:
+                        if gc.type == "template_literal":
+                            parts.append(gc.text.decode("utf-8", errors="replace"))
+                elif child.type in ("block_start", "body", "block_end"):
+                    break
+            return ".".join(parts) if parts else None
+
+        # Proto: message → message_name; service → service_name; rpc → rpc_name → identifier
+        if self.language == "proto":
+            if t == "message":
+                for child in node.children:
+                    if child.type == "message_name":
+                        return child.text.decode("utf-8", errors="replace")
+            if t == "service":
+                for child in node.children:
+                    if child.type == "service_name":
+                        return child.text.decode("utf-8", errors="replace")
+            if t == "rpc":
+                for child in node.children:
+                    if child.type == "rpc_name":
+                        for gc in child.children:
+                            if gc.type == "identifier":
+                                return gc.text.decode("utf-8", errors="replace")
+            return None
+
+        # GraphQL: type_system_definition → type_definition → *_type_definition → name child
+        if self.language == "graphql" and t == "type_system_definition":
+            for child in node.children:
+                if child.type == "type_definition":
+                    for gc in child.children:
+                        for ggc in gc.children:
+                            if ggc.type == "name":
+                                return ggc.text.decode("utf-8", errors="replace")
+            return None
+
+        # SQL: create_table/create_view/create_function → object_reference; create_index → identifier
+        if self.language == "sql":
+            if t in ("create_table", "create_view", "create_function"):
+                for child in node.children:
+                    if child.type == "object_reference":
+                        return child.text.decode("utf-8", errors="replace")
+            if t == "create_index":
+                for child in node.children:
+                    if child.type == "identifier":
+                        return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # XML: element → STag → Name
+        if self.language == "xml" and t == "element":
+            for child in node.children:
+                if child.type == "STag":
+                    for gc in child.children:
+                        if gc.type == "Name":
+                            return gc.text.decode("utf-8", errors="replace")
+            return None
+
+        # Svelte/Vue: fixed section names by node type
+        if self.language in ("svelte", "vue"):
+            if t == "script_element":
+                return "script"
+            if t == "style_element":
+                return "style"
+            if t == "template_element":
+                return "template"
+            return None
+
+        # PowerShell: function_statement → function_name child
+        if self.language == "powershell" and t == "function_statement":
+            for child in node.children:
+                if child.type == "function_name":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # Dockerfile: from_instruction → image_spec child
+        if self.language == "dockerfile" and t == "from_instruction":
+            for child in node.children:
+                if child.type == "image_spec":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # Make: rule → targets child (first target name)
+        if self.language == "make" and t == "rule":
+            for child in node.children:
+                if child.type == "targets":
+                    return child.text.decode("utf-8", errors="replace").split()[0]
+            return None
+
+        # Perl: subroutine → bareword; package → second package token
+        if self.language == "perl":
+            if t == "subroutine_declaration_statement":
+                for child in node.children:
+                    if child.type == "bareword":
+                        return child.text.decode("utf-8", errors="replace")
+                return None
+            if t == "package_statement":
+                count = 0
+                for child in node.children:
+                    if child.type == "package":
+                        count += 1
+                        if count == 2:
+                            return child.text.decode("utf-8", errors="replace")
+                return None
+
+        # Zig: FnProto/VarDecl use IDENTIFIER (uppercase) not identifier
+        if self.language == "zig" and t in ("FnProto", "VarDecl"):
+            for child in node.children:
+                if child.type == "IDENTIFIER":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # Clojure: list_lit → second sym_lit (name after defn/def/ns/etc.)
+        if self.language == "clojure" and t == "list_lit":
+            sym_count = 0
+            for child in node.children:
+                if child.type == "sym_lit":
+                    sym_count += 1
+                    if sym_count == 2:
+                        return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # Fish: function_definition → word child
+        if self.language == "fish" and t == "function_definition":
+            for child in node.children:
+                if child.type == "word":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # Batch: function_definition → function_name child
+        if self.language == "batch" and t == "function_definition":
+            for child in node.children:
+                if child.type == "function_name":
+                    return child.text.decode("utf-8", errors="replace")
             return None
 
         # INI: section — name is from section_name → text child
