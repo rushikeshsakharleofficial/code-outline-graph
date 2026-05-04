@@ -20,6 +20,7 @@ class Indexer:
         self.parser = SymbolParser()
         self._embedder = None  # lazy singleton — loaded once, reused
         self._embed_thread: threading.Thread | None = None
+        self._embed_progress: dict = {"total": 0, "done": 0, "current": ""}
 
     def _get_embedder(self):
         if self._embedder is None:
@@ -71,23 +72,33 @@ class Indexer:
             from .embeddings import serialize_float32
             embedder = self._get_embedder()
             rows = self.db.conn.execute(
-                "SELECT s.id, s.name, s.signature, s.docstring FROM symbols s "
+                "SELECT s.id, s.name, s.signature, s.docstring, s.file_path FROM symbols s "
                 "LEFT JOIN vec_symbols v ON v.symbol_id = s.id "
                 "WHERE v.symbol_id IS NULL"
             ).fetchall()
             if not rows:
                 return
-            texts = [
-                f"{r['name']} {r['signature'] or ''} {r['docstring'] or ''}".strip()
-                for r in rows
-            ]
-            vecs = embedder.encode_batch(texts)
-            with self.db._lock:
-                self.db.conn.executemany(
-                    "INSERT OR REPLACE INTO vec_symbols (symbol_id, embedding) VALUES (?, ?)",
-                    [(rows[i]["id"], serialize_float32(vecs[i])) for i in range(len(rows))]
-                )
-                self.db.conn.commit()
+            total = len(rows)
+            self._embed_progress["total"] = total
+            self._embed_progress["done"] = 0
+            chunk_size = 32
+            for i in range(0, total, chunk_size):
+                chunk = rows[i : i + chunk_size]
+                self._embed_progress["current"] = os.path.basename(chunk[0]["file_path"] or "")
+                texts = [
+                    f"{r['name']} {r['signature'] or ''} {r['docstring'] or ''}".strip()
+                    for r in chunk
+                ]
+                vecs = embedder.encode_batch(texts)
+                with self.db._lock:
+                    self.db.conn.executemany(
+                        "INSERT OR REPLACE INTO vec_symbols (symbol_id, embedding) VALUES (?, ?)",
+                        [(chunk[j]["id"], serialize_float32(vecs[j])) for j in range(len(chunk))]
+                    )
+                    self.db.conn.commit()
+                self._embed_progress["done"] = min(i + chunk_size, total)
+            self._embed_progress["done"] = total
+            self._embed_progress["current"] = ""
         except Exception:
             pass
 

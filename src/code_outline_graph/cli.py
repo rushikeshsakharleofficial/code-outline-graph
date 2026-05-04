@@ -1,7 +1,9 @@
 import argparse
 import json
 import os
+import shutil
 import sys
+import time
 
 from .paths import ensure_project_db_path, resolve_project_path
 
@@ -188,6 +190,38 @@ def _get_db_indexer(project_path: str | None = None):
     return db, Indexer(db), db_path
 
 
+def _show_embed_progress(indexer) -> None:
+    """Render a live progress bar while the embedding thread runs."""
+    if not (indexer._embed_thread and indexer._embed_thread.is_alive()):
+        return
+
+    BAR_WIDTH = 20
+    term_width = shutil.get_terminal_size((80, 20)).columns
+
+    print("\n[+] Waiting for symbol embeddings (semantic search)...")
+
+    while indexer._embed_thread.is_alive():
+        prog = indexer._embed_progress
+        total = prog["total"]
+        done = prog["done"]
+        current = prog["current"]
+
+        pct = done / total if total > 0 else 0
+        filled = int(BAR_WIDTH * pct)
+        bar = "█" * filled + "░" * (BAR_WIDTH - filled)
+        suffix = f"  {current}" if current else ""
+        line = f"\r[{bar}] {int(pct * 100):3d}%{suffix}"
+        if len(line) > term_width:
+            line = line[: term_width - 3] + "..."
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        time.sleep(0.1)
+
+    bar = "█" * BAR_WIDTH
+    sys.stdout.write(f"\r[{bar}] 100%{' ' * 30}\n")
+    sys.stdout.flush()
+
+
 def cmd_build(args):
     import time as _time
 
@@ -319,7 +353,7 @@ def cmd_build(args):
     print("\n[7/7] Installing Claude Code skill...")
     cmd_install_skill(None)
 
-    print("\n[+] Waiting for symbol embeddings (semantic search)...")
+    _show_embed_progress(indexer)
     indexer.wait_for_embeddings()
 
     # Footer box
