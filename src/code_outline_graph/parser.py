@@ -31,6 +31,7 @@ LANGUAGE_MAP: dict[str, str] = {
     ".ini": "ini",
     ".cfg": "ini",
     ".md": "markdown",
+    ".db": "sqlite",
 }
 
 
@@ -57,12 +58,48 @@ class SymbolParser:
         if language is None:
             return []
 
+        if language == "sqlite":
+            return _parse_sqlite_schema(file_path)
+
         source = Path(file_path).read_bytes()
         parser = self._get_parser(language)
         tree = parser.parse(source)
 
         extractor = SymbolExtractor(source=source, language=language, file_path=file_path)
         return extractor.extract(tree.root_node)
+
+
+def _parse_sqlite_schema(file_path: str) -> list[Symbol]:
+    """Extract tables and views from a SQLite database as symbols."""
+    import sqlite3 as _sqlite3
+    symbols: list[Symbol] = []
+    try:
+        conn = _sqlite3.connect(f"file:{file_path}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' "
+            "ORDER BY type, name"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return []
+    for line_no, (obj_type, name, ddl) in enumerate(rows, start=1):
+        kind = "table" if obj_type == "table" else "view"
+        signature = (ddl or "").split("\n")[0].strip()[:120]
+        symbols.append(Symbol(
+            name=name,
+            kind=kind,
+            file_path=file_path,
+            start_line=line_no,
+            end_line=line_no,
+            signature=signature,
+            docstring=None,
+            parent_name=None,
+            parent_id=None,
+            language="sqlite",
+            checksum="",
+        ))
+    return symbols
 
 
 class SymbolExtractor:
