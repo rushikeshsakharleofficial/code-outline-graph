@@ -13,12 +13,50 @@ pip install code-outline-graph
 ## Quick Start
 
 ```bash
-# Index your project (writes .mcp.json automatically)
 cd your-project
 code-outline-graph build .
+```
 
-# MCP server auto-configures via .mcp.json
-# Supported clients: Claude Code, Cursor, Codex, any MCP-compatible client
+`build` runs once and configures everything — index, MCP configs, hooks, skill. Output:
+
+```
+╔══════════════════════════════════════════════════════════╗
+║         code-outline-graph  •  Building Index            ║
+╚══════════════════════════════════════════════════════════╝
+
+[1/7] Indexing /home/user/myproject ...
+
+      SKIP   .env                        (secret file)
+      WARN   src/broken.py               parse error line 42
+      OK     src/auth/views.py           23 symbols   0.04s
+      OK     src/api/routes.py           45 symbols   0.11s
+
+      src/auth/      →   3 files    67 symbols
+      src/api/       →   8 files   203 symbols
+
+      [████████████████████] 100%  186 files · 1789 symbols  →  Done!
+      Skipped: 1  •  Errors: 1  •  Time: 3.2s
+
+[2/7] Writing Claude Code / Cursor MCP config (.mcp.json) ...
+      Written: /home/user/myproject/.mcp.json  ✓
+[3/7] Writing Codex CLI config + hooks ...
+      Written: .codex/config.toml  ✓
+      Written: .codex/hooks.json   ✓
+[4/7] Writing Gemini CLI config + hooks ...
+      Written: .gemini/settings.json  ✓
+[5/7] Writing Claude Code SessionStart + PostToolUse hooks ...
+      Written: .claude/settings.json  ✓
+[6/7] Writing AI instruction blocks ...
+      Updated: AGENTS.md  ✓
+      Updated: GEMINI.md  ✓
+[7/7] Installing Claude Code skill ...
+      Installed: SKILL.md     ✓
+      Installed: examples.md  ✓
+
+══════════════════════════════════════════════════════════
+  Build complete in 5.1s
+  186 files  •  1789 symbols  •  1 skipped  •  1 error
+══════════════════════════════════════════════════════════
 ```
 
 ## CLI Commands
