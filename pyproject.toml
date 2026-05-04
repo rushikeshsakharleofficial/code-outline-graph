@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.scripts]
-code-outline-graph = "code_outline_graph.server:main"
+code-outline-graph = "code_outline_graph.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/code_outline_graph"]

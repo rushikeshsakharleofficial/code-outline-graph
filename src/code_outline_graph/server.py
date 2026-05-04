@@ -86,7 +86,7 @@ async def call_tool(name: str, arguments: dict):
     db, indexer, searcher = _get_components()
 
     if name == "list_outline":
-        file_path = os.path.expanduser(arguments["file"])
+        file_path = os.path.abspath(os.path.expanduser(arguments["file"]))
         indexer.ensure_fresh(file_path)
         symbols = db.get_symbols_by_file(file_path)
         result = [{"name":s.name,"kind":s.kind,"start_line":s.start_line,"end_line":s.end_line,"signature":s.signature,"parent_name":s.parent_name} for s in symbols]
@@ -95,7 +95,7 @@ async def call_tool(name: str, arguments: dict):
     elif name == "get_symbol":
         file_arg = arguments.get("file")
         if file_arg:
-            file_arg = os.path.expanduser(file_arg)
+            file_arg = os.path.abspath(os.path.expanduser(file_arg))
             indexer.ensure_fresh(file_arg)
         sym = db.get_symbol_by_name(arguments["name"], file_arg)
         if not sym:
@@ -108,7 +108,7 @@ async def call_tool(name: str, arguments: dict):
         }))]
 
     elif name == "read_symbol_body":
-        file_path = os.path.expanduser(arguments["file"])
+        file_path = os.path.abspath(os.path.expanduser(arguments["file"]))
         indexer.ensure_fresh(file_path)
         sym = db.get_symbol_by_name(arguments["name"], file_path)
         if not sym:
@@ -124,19 +124,19 @@ async def call_tool(name: str, arguments: dict):
         return [types.TextContent(type="text", text=json.dumps(results))]
 
     elif name == "get_line_range":
-        file_path = os.path.expanduser(arguments["file"])
+        file_path = os.path.abspath(os.path.expanduser(arguments["file"]))
         indexer.ensure_fresh(file_path)
         return [types.TextContent(type="text", text=_read_lines(file_path, int(arguments["start"]), int(arguments["end"])))]
 
     elif name == "get_outline_summary":
-        file_path = os.path.expanduser(arguments["file"])
+        file_path = os.path.abspath(os.path.expanduser(arguments["file"]))
         indexer.ensure_fresh(file_path)
         symbols = db.get_symbols_by_file(file_path)
         lines = [f"{s.start_line}-{s.end_line} [{s.kind}] {s.signature or s.name}" for s in symbols]
         return [types.TextContent(type="text", text="\n".join(lines))]
 
     elif name == "get_file_header":
-        file_path = os.path.expanduser(arguments["file"])
+        file_path = os.path.abspath(os.path.expanduser(arguments["file"]))
         indexer.ensure_fresh(file_path)
         symbols = db.get_symbols_by_file(file_path)
         header_syms = [s for s in symbols if s.kind in ("import", "variable") and s.start_line < 50]

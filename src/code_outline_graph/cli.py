@@ -90,7 +90,11 @@ def cmd_search(args):
 
 
 def cmd_outline(args):
-    file_path = os.path.abspath(args.file)
+    if os.path.isabs(args.file):
+        file_path = args.file
+    else:
+        project = resolve_project_path(getattr(args, 'project', '.'))
+        file_path = os.path.abspath(os.path.join(project, args.file))
     db, indexer, _db_path = _get_db_indexer(args.project)
     indexer.ensure_fresh(file_path)
     symbols = db.get_symbols_by_file(file_path)
@@ -125,12 +129,23 @@ def cmd_status(args):
 
 def cmd_serve(_args):
     import asyncio
+    from .paths import project_db_path
 
     async def _run():
         from mcp.server.stdio import stdio_server
-        from .server import app, configure_project
+        from .server import app, configure_project, _get_components
+        from . import server as server_mod
+        from .watcher import CodeWatcher
 
-        configure_project(getattr(_args, "project", "."))
+        project = resolve_project_path(getattr(_args, "project", "."))
+        configure_project(project)
+
+        db_path = project_db_path(project)
+        if os.path.exists(db_path):
+            db, indexer, searcher = _get_components(project)
+            server_mod._watcher = CodeWatcher(indexer, project)
+            server_mod._watcher.start()
+
         async with stdio_server() as (r, w):
             await app.run(r, w, app.create_initialization_options())
 
