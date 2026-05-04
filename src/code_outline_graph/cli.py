@@ -257,8 +257,6 @@ def cmd_build(args):
             _live_stats["symbols"] += symbol_count
             _dir_stats[rel]["files"] += 1
             _dir_stats[rel]["symbols"] += symbol_count
-            ok_msg = f"      OK     {os.path.relpath(full_path, path):<40}  {symbol_count} symbols   {elapsed_ms/1000:.2f}s"
-            _print_msg(ok_msg)
         else:
             _live_stats["errors"] += 1
             warn_msg = f"      WARN   {os.path.relpath(full_path, path):<40}  {error[:60]}"
@@ -320,6 +318,9 @@ def cmd_build(args):
 
     print("\n[7/7] Installing Claude Code skill...")
     cmd_install_skill(None)
+
+    print("\n[+] Waiting for symbol embeddings (semantic search)...")
+    indexer.wait_for_embeddings()
 
     # Footer box
     _total_elapsed = _time.time() - _start_time

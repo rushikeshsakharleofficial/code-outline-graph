@@ -1,6 +1,7 @@
 import os
 import time
 import hashlib
+import threading
 from .db import Database
 from .parser import SymbolParser, detect_language
 
@@ -18,6 +19,7 @@ class Indexer:
         self.db = db
         self.parser = SymbolParser()
         self._embedder = None  # lazy singleton — loaded once, reused
+        self._embed_thread: threading.Thread | None = None
 
     def _get_embedder(self):
         if self._embedder is None:
@@ -60,12 +62,18 @@ class Indexer:
             pass  # embeddings are optional — never crash indexing
 
     def _batch_embed_all(self):
-        """Embed all indexed symbols in one batch. Called once after index_project."""
+        """Embed symbols that are missing embeddings. Safe to run concurrently."""
         try:
+            try:
+                os.nice(15)
+            except (AttributeError, OSError):
+                pass
             from .embeddings import serialize_float32
             embedder = self._get_embedder()
             rows = self.db.conn.execute(
-                "SELECT id, name, signature, docstring FROM symbols"
+                "SELECT s.id, s.name, s.signature, s.docstring FROM symbols s "
+                "LEFT JOIN vec_symbols v ON v.symbol_id = s.id "
+                "WHERE v.symbol_id IS NULL"
             ).fetchall()
             if not rows:
                 return
@@ -75,7 +83,6 @@ class Indexer:
             ]
             vecs = embedder.encode_batch(texts)
             with self.db._lock:
-                self.db.conn.execute("DELETE FROM vec_symbols")
                 self.db.conn.executemany(
                     "INSERT OR REPLACE INTO vec_symbols (symbol_id, embedding) VALUES (?, ?)",
                     [(rows[i]["id"], serialize_float32(vecs[i])) for i in range(len(rows))]
@@ -83,6 +90,11 @@ class Indexer:
                 self.db.conn.commit()
         except Exception:
             pass
+
+    def wait_for_embeddings(self) -> None:
+        """Block until any background embedding thread completes."""
+        if self._embed_thread and self._embed_thread.is_alive():
+            self._embed_thread.join()
 
     def index_project(self, project_path: str, on_file=None, on_skip=None) -> dict:
         """Walk project directory and index all supported files."""
@@ -135,8 +147,11 @@ class Indexer:
                     if on_file is not None:
                         on_file(full, 0, elapsed_ms, error=str(e))
 
-        # Single batch embed after all files indexed — model loaded once
-        self._batch_embed_all()
+        # Embed in background — don't block return on large codebases
+        if self._embed_thread and self._embed_thread.is_alive():
+            self._embed_thread.join(timeout=1)
+        self._embed_thread = threading.Thread(target=self._batch_embed_all, daemon=True)
+        self._embed_thread.start()
         return stats
 
     def ensure_fresh(self, file_path: str):

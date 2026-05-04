@@ -3,8 +3,8 @@ import struct
 
 _model = None
 
-# Max threads for ONNX/OpenMP — default 2, override with CODE_OUTLINE_THREADS env var
-_THREAD_CAP = str(max(1, int(os.environ.get("CODE_OUTLINE_THREADS", "2"))))
+# Max threads for ONNX/OpenMP — default 1, override with CODE_OUTLINE_THREADS env var
+_THREAD_CAP = str(max(1, int(os.environ.get("CODE_OUTLINE_THREADS", "1"))))
 
 
 def _limit_threads():
@@ -53,7 +53,7 @@ class Embedder:
             chunk = texts[i: i + batch_size]
             out.extend(v.tolist() for v in model.embed(chunk))
             if i + batch_size < len(texts):
-                time.sleep(0.01)  # 10ms yield between chunks
+                time.sleep(0.05)  # 50ms yield between chunks
         return out
 
 
