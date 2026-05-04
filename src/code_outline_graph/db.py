@@ -34,6 +34,9 @@ class Symbol:
 class Database:
     def __init__(self, path: str) -> None:
         self.conn = sqlite3.connect(path, check_same_thread=False)
+        self._lock = threading.RLock()
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.row_factory = sqlite3.Row
         _load_sqlite_vec(self.conn)
         self._create_schema()
@@ -104,67 +107,69 @@ class Database:
         checksum: str,
         language: str,
     ) -> None:
-        now = int(time.time())
-        with self.conn:
-            # delete vec_symbols first (foreign key order)
-            ids = [row[0] for row in self.conn.execute("SELECT id FROM symbols WHERE file_path=?", (file_path,)).fetchall()]
-            if ids:
-                placeholders = ",".join("?" * len(ids))
-                self.conn.execute(f"DELETE FROM vec_symbols WHERE symbol_id IN ({placeholders})", ids)
-            self.conn.execute("DELETE FROM symbols WHERE file_path=?", (file_path,))
-            for sym in symbols:
+        with self._lock:
+            now = int(time.time())
+            with self.conn:
+                # delete vec_symbols first (foreign key order)
+                ids = [row[0] for row in self.conn.execute("SELECT id FROM symbols WHERE file_path=?", (file_path,)).fetchall()]
+                if ids:
+                    placeholders = ",".join("?" * len(ids))
+                    self.conn.execute(f"DELETE FROM vec_symbols WHERE symbol_id IN ({placeholders})", ids)
+                self.conn.execute("DELETE FROM symbols WHERE file_path=?", (file_path,))
+                for sym in symbols:
+                    self.conn.execute(
+                        """
+                        INSERT INTO symbols
+                            (name, kind, file_path, start_line, end_line,
+                             signature, docstring, parent_name, parent_id,
+                             language, checksum, indexed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            sym.name,
+                            sym.kind,
+                            sym.file_path,
+                            sym.start_line,
+                            sym.end_line,
+                            sym.signature,
+                            sym.docstring,
+                            sym.parent_name,
+                            sym.parent_id,
+                            sym.language,
+                            sym.checksum,
+                            now,
+                        ),
+                    )
                 self.conn.execute(
                     """
-                    INSERT INTO symbols
-                        (name, kind, file_path, start_line, end_line,
-                         signature, docstring, parent_name, parent_id,
-                         language, checksum, indexed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO indexed_files
+                        (file_path, checksum, git_head, symbol_count, language, indexed_at)
+                    VALUES (?, ?, NULL, ?, ?, ?)
+                    ON CONFLICT(file_path) DO UPDATE SET
+                        checksum     = excluded.checksum,
+                        symbol_count = excluded.symbol_count,
+                        language     = excluded.language,
+                        indexed_at   = excluded.indexed_at
                     """,
-                    (
-                        sym.name,
-                        sym.kind,
-                        sym.file_path,
-                        sym.start_line,
-                        sym.end_line,
-                        sym.signature,
-                        sym.docstring,
-                        sym.parent_name,
-                        sym.parent_id,
-                        sym.language,
-                        sym.checksum,
-                        now,
-                    ),
+                    (file_path, checksum, len(symbols), language, now),
                 )
-            self.conn.execute(
-                """
-                INSERT INTO indexed_files
-                    (file_path, checksum, git_head, symbol_count, language, indexed_at)
-                VALUES (?, ?, NULL, ?, ?, ?)
-                ON CONFLICT(file_path) DO UPDATE SET
-                    checksum     = excluded.checksum,
-                    symbol_count = excluded.symbol_count,
-                    language     = excluded.language,
-                    indexed_at   = excluded.indexed_at
-                """,
-                (file_path, checksum, len(symbols), language, now),
-            )
 
     def delete_symbols_for_file(self, file_path: str) -> None:
-        with self.conn:
-            self.conn.execute(
-                "DELETE FROM vec_symbols WHERE symbol_id IN "
-                "(SELECT id FROM symbols WHERE file_path = ?)",
-                (file_path,),
-            )
-            self.conn.execute(
-                "DELETE FROM symbols WHERE file_path = ?",
-                (file_path,),
-            )
-            self.conn.execute(
-                "DELETE FROM indexed_files WHERE file_path = ?",
-                (file_path,),
-            )
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    "DELETE FROM vec_symbols WHERE symbol_id IN "
+                    "(SELECT id FROM symbols WHERE file_path = ?)",
+                    (file_path,),
+                )
+                self.conn.execute(
+                    "DELETE FROM symbols WHERE file_path = ?",
+                    (file_path,),
+                )
+                self.conn.execute(
+                    "DELETE FROM indexed_files WHERE file_path = ?",
+                    (file_path,),
+                )
 
     def get_symbols_by_file(self, file_path: str) -> list[Symbol]:
         rows = self.conn.execute(
@@ -246,3 +251,7 @@ class Database:
             (file_path,),
         ).fetchone()
         return row["checksum"] if row is not None else None
+
+    def close(self) -> None:
+        with self._lock:
+            self.conn.close()

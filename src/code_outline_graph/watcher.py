@@ -52,10 +52,30 @@ class GitHeadHandler(FileSystemEventHandler):
     def __init__(self, indexer, project_path: str):
         self.indexer = indexer
         self.project_path = project_path
+        self._timer = None
+        self._lock = threading.Lock()
 
     def on_modified(self, event):
         if event.src_path.endswith("HEAD"):
+            self._schedule_reindex()
+
+    def on_created(self, event):
+        if event.src_path.endswith("HEAD"):
+            self._schedule_reindex()
+
+    def _schedule_reindex(self):
+        with self._lock:
+            if self._timer:
+                self._timer.cancel()
+            self._timer = threading.Timer(2.0, self._reindex)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _reindex(self):
+        try:
             self.indexer.index_project(self.project_path)
+        except Exception:
+            pass
 
 
 class CodeWatcher:
