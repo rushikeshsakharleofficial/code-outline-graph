@@ -60,6 +60,9 @@ def cmd_update(args):
         )]
         for fname in files:
             full = os.path.join(root, fname)
+            if fname in (".env", ".env.local", ".env.production", ".env.development"):
+                skipped += 1
+                continue
             if not detect_language(full):
                 continue
             try:

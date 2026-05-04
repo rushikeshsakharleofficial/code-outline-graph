@@ -25,7 +25,34 @@ class Indexer:
         for s in symbols:
             s.checksum = checksum
         self.db.insert_symbols(symbols, file_path, checksum, language)
+        self._update_embeddings_for_file(file_path)
         return len(symbols)
+
+    def _update_embeddings_for_file(self, file_path: str):
+        """Update vec_symbols for symbols in one file. Lazy — skips if fastembed not available."""
+        try:
+            from .search import Searcher
+            from .embeddings import Embedder
+            searcher = Searcher(self.db)
+            # Get only symbols for this file
+            symbols = self.db.get_symbols_by_file(file_path)
+            if not symbols:
+                return
+            from .embeddings import serialize_float32
+            embedder = Embedder()
+            texts = [
+                f"{s.name} {s.signature or ''} {s.docstring or ''}".strip()
+                for s in symbols
+            ]
+            vecs = embedder.encode_batch(texts)
+            with self.db._lock:
+                self.db.conn.executemany(
+                    "INSERT OR REPLACE INTO vec_symbols (symbol_id, embedding) VALUES (?, ?)",
+                    [(symbols[i].id, serialize_float32(vecs[i])) for i in range(len(symbols))]
+                )
+                self.db.conn.commit()
+        except Exception:
+            pass  # embeddings are optional enhancement — never crash indexing
 
     def index_project(self, project_path: str) -> dict:
         """Walk project directory and index all supported files."""
@@ -46,6 +73,9 @@ class Indexer:
             )]
             for fname in files:
                 full = os.path.join(root, fname)
+                if fname in (".env", ".env.local", ".env.production", ".env.development"):
+                    stats["skipped"] += 1
+                    continue
                 if matches(full):
                     stats["skipped"] += 1
                     continue

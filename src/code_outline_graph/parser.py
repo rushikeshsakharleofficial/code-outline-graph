@@ -30,7 +30,6 @@ LANGUAGE_MAP: dict[str, str] = {
     ".toml": "toml",
     ".ini": "ini",
     ".cfg": "ini",
-    ".env": "ini",
 }
 
 
