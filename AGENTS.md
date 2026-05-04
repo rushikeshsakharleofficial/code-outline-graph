@@ -1,24 +1,36 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`src/code_outline_graph/` contains the package. Keep modules focused: `db.py` owns SQLite storage, `parser.py` extracts symbols with tree-sitter, `indexer.py` handles indexing and freshness checks, `search.py` ranks results, `watcher.py` monitors file and git changes, `server.py` exposes MCP tools, and `cli.py` wires terminal commands. Tests live in `tests/`. Top-level files are limited to packaging and docs such as `pyproject.toml`, `README.md`, and generated local config like `.mcp.json`.
+Core package lives in `src/code_outline_graph/`. Main modules: `parser.py` for tree-sitter extraction, `indexer.py` for project indexing, `db.py` for SQLite storage, `search.py` for FTS/vector lookup, `watcher.py` for file change tracking, `server.py` for MCP tools, and `cli.py` for the `code-outline-graph` entrypoint. Tests live in `tests/`, with reusable fixtures under `tests/fixtures/`. Repo docs start in `README.md`; release automation lives in `.github/workflows/`.
 
 ## Build, Test, and Development Commands
-`python -m pip install -e .` installs the package in editable mode.
-`python -m pip install pytest pytest-asyncio` installs the current test dependencies.
-`python -m build` builds wheel and sdist artifacts for release checks.
-`python -m pytest` runs the test suite; today this is mainly for tests added during a change.
-`code-outline-graph build .` smoke-tests indexing against a local repository.
-`code-outline-graph serve .` starts the MCP server over stdio for this project.
+Use Python 3.11+.
+
+```bash
+python -m venv venv
+. venv/bin/activate
+pip install -e .
+pip install pytest pytest-asyncio
+pytest
+```
+
+Useful local commands:
+
+```bash
+pytest tests/test_indexer.py      # run one test module
+python -m build                   # build sdist/wheel
+code-outline-graph build .        # generate local index + .mcp.json
+code-outline-graph status .       # inspect indexed project state
+```
 
 ## Coding Style & Naming Conventions
-Target Python 3.11+ with 4-space indentation. Follow the existing naming pattern: `snake_case` for functions and variables, `PascalCase` for classes, and uppercase constants such as `PROJECT_STATE_DIR`. Prefer explicit imports, short functional docstrings, and type hints on public functions. No formatter or linter is configured in-repo, so match neighboring code and avoid style-only churn.
+Follow existing Python style: 4-space indentation, type hints where helpful, small focused functions, and module-level responsibilities kept clear. Use `snake_case` for functions, variables, and test names; `PascalCase` for classes; keep CLI handlers named `cmd_*` to match `cli.py`. Prefer explicit paths and deterministic return values because this project writes config and index files.
 
 ## Testing Guidelines
-Use `pytest` and `pytest-asyncio`, especially for async MCP server behavior. Name files `test_*.py` and test functions `test_*`. Prioritize parser extraction, database/index freshness, CLI commands, and MCP tool responses.
+Tests use `pytest` with simple function-style cases named `test_*`. Add targeted unit tests beside the affected area, and use fixtures from `tests/conftest.py` or `tests/fixtures/` when behavior depends on workspace layout. Cover parser, indexer, search, and CLI behavior whenever logic changes. Run `pytest` before opening a PR; for bug fixes, add a regression test first.
 
 ## Commit & Pull Request Guidelines
-Recent history uses Conventional Commits: `feat:`, `fix:`, `docs:`, and `chore:`. Keep subjects short and imperative, for example `feat: add Kotlin import parsing`. Pull requests should describe the behavior change, list validation commands, and include sample CLI output or MCP request/response snippets when tool behavior changes. Link the related issue when one exists.
+Recent history uses Conventional Commit prefixes like `fix:`, `ci:`, and `chore:`. Keep subjects short and imperative, for example `fix: normalize project paths in CLI`. PRs should explain behavior changes, list test commands run, and note any user-visible CLI or MCP output changes. Include sample output when changing indexing, config generation, or search results.
 
-## Configuration Tips
-Do not commit local artifacts such as `.mcp.json`, `.code-outline-graph/`, `*.db`, `.env`, or virtual environments. Prefer repo-relative example paths in docs and tests instead of machine-specific absolute paths.
+## Security & Configuration Tips
+Do not commit generated project indexes, local virtualenv contents, or secrets. Changes touching indexing rules should preserve the current expectation that ignored or sensitive files are not exposed through the outline or MCP server.
