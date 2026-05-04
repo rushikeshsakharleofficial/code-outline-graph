@@ -30,6 +30,7 @@ LANGUAGE_MAP: dict[str, str] = {
     ".toml": "toml",
     ".ini": "ini",
     ".cfg": "ini",
+    ".md": "markdown",
 }
 
 
@@ -207,6 +208,30 @@ class SymbolExtractor:
             if t == "setting":
                 return "variable"
 
+        elif lang in ("c", "cpp"):
+            if t == "function_definition":
+                return "function"
+            if t == "type_definition":
+                return "class"
+            if t == "class_specifier":
+                return "class"
+            if t == "namespace_definition":
+                return "class"
+            if t == "preproc_include":
+                return "import"
+            if t == "preproc_def":
+                return "variable"
+
+        elif lang == "markdown":
+            if t == "section":
+                # Only ATX-headed sections become symbols; setext_heading siblings handled below
+                for child in node.children:
+                    if child.type == "atx_heading":
+                        return "section"
+                return None
+            if t == "setext_heading":
+                return "section"
+
         return None
 
     def _has_class_parent(self, node) -> bool:
@@ -307,6 +332,68 @@ class SymbolExtractor:
                     if child.type in ("bare_key", "quoted_key"):
                         return child.text.decode("utf-8", errors="replace")
                 return None
+
+        # C/C++: function — name from function_declarator → identifier (or qualified_identifier)
+        if self.language in ("c", "cpp") and t == "function_definition":
+            for child in node.children:
+                if child.type == "function_declarator":
+                    for subchild in child.children:
+                        if subchild.type == "qualified_identifier":
+                            return subchild.text.decode("utf-8", errors="replace")
+                        if subchild.type == "identifier":
+                            return subchild.text.decode("utf-8", errors="replace")
+            return None
+
+        # C/C++: typedef — name is the last type_identifier child
+        if self.language in ("c", "cpp") and t == "type_definition":
+            name = None
+            for child in node.children:
+                if child.type == "type_identifier":
+                    name = child.text.decode("utf-8", errors="replace")
+            return name
+
+        # C++: class_specifier — name is the type_identifier child
+        if self.language == "cpp" and t == "class_specifier":
+            for child in node.children:
+                if child.type == "type_identifier":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # C++: namespace — name is namespace_identifier
+        if self.language == "cpp" and t == "namespace_definition":
+            for child in node.children:
+                if child.type == "namespace_identifier":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # C/C++: preprocessor include — full first line text
+        if self.language in ("c", "cpp") and t == "preproc_include":
+            return node.text.decode("utf-8", errors="replace").split("\n")[0].strip()[:80]
+
+        # C/C++: macro define — identifier child
+        if self.language in ("c", "cpp") and t == "preproc_def":
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode("utf-8", errors="replace")
+            return None
+
+        # Markdown: ATX section — name from atx_heading → inline
+        if self.language == "markdown" and t == "section":
+            for child in node.children:
+                if child.type == "atx_heading":
+                    for subchild in child.children:
+                        if subchild.type == "inline":
+                            return subchild.text.decode("utf-8", errors="replace").strip()
+            return None
+
+        # Markdown: setext heading — name from paragraph → inline
+        if self.language == "markdown" and t == "setext_heading":
+            for child in node.children:
+                if child.type == "paragraph":
+                    for gc in child.children:
+                        if gc.type == "inline":
+                            return gc.text.decode("utf-8", errors="replace").strip()
+            return None
 
         # INI: section — name is from section_name → text child
         if self.language == "ini":

@@ -65,6 +65,8 @@ async def list_tools():
         types.Tool(name="get_file_header",
             description="Get file header: shebang, imports, module docstring, top-level constants",
             inputSchema={"type":"object","properties":{"file":{"type":"string"}},"required":["file"]}),
+        types.Tool(name="update_project", description="Reindex only changed files in the active project (faster than index_project)",
+            inputSchema={"type":"object","properties":{"path":{"type":"string"}},"required":[]}),
     ]
 
 
@@ -147,6 +149,36 @@ async def call_tool(name: str, arguments: dict):
             last_line = max(s.end_line for s in header_syms)
             body = _read_lines(file_path, 1, last_line)
         return [types.TextContent(type="text", text=body)]
+
+    elif name == "update_project":
+        from .parser import detect_language
+        from .indexer import compute_checksum
+        project_path = resolve_project_path(arguments.get("path") or _active_project_path)
+        updated = 0
+        skipped = 0
+        errors = 0
+        for root, dirs, files in os.walk(project_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (
+                "node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"
+            )]
+            for fname in files:
+                full = os.path.join(root, fname)
+                if fname in (".env", ".env.local", ".env.production", ".env.development"):
+                    skipped += 1
+                    continue
+                if not detect_language(full):
+                    continue
+                try:
+                    current = compute_checksum(full)
+                    stored = db.get_indexed_checksum(full)
+                    if stored != current:
+                        indexer.index_file(full)
+                        updated += 1
+                    else:
+                        skipped += 1
+                except Exception:
+                    errors += 1
+        return [types.TextContent(type="text", text=json.dumps({"updated": updated, "skipped": skipped, "errors": errors}))]
 
     return [types.TextContent(type="text", text=json.dumps({"error":"unknown_tool","tool":name}))]
 
