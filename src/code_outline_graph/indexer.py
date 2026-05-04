@@ -17,8 +17,15 @@ class Indexer:
     def __init__(self, db: Database):
         self.db = db
         self.parser = SymbolParser()
+        self._embedder = None  # lazy singleton — loaded once, reused
 
-    def index_file(self, file_path: str) -> int:
+    def _get_embedder(self):
+        if self._embedder is None:
+            from .embeddings import Embedder
+            self._embedder = Embedder()
+        return self._embedder
+
+    def index_file(self, file_path: str, embed: bool = True) -> int:
         """Parse and store symbols for one file. Returns symbol count."""
         checksum = compute_checksum(file_path)
         language = detect_language(file_path) or "unknown"
@@ -26,21 +33,18 @@ class Indexer:
         for s in symbols:
             s.checksum = checksum
         self.db.insert_symbols(symbols, file_path, checksum, language)
-        self._update_embeddings_for_file(file_path)
+        if embed:
+            self._update_embeddings_for_file(file_path)
         return len(symbols)
 
     def _update_embeddings_for_file(self, file_path: str):
-        """Update vec_symbols for symbols in one file. Lazy — skips if fastembed not available."""
+        """Update vec_symbols for one file using shared embedder singleton."""
         try:
-            from .search import Searcher
-            from .embeddings import Embedder
-            searcher = Searcher(self.db)
-            # Get only symbols for this file
+            from .embeddings import serialize_float32
             symbols = self.db.get_symbols_by_file(file_path)
             if not symbols:
                 return
-            from .embeddings import serialize_float32
-            embedder = Embedder()
+            embedder = self._get_embedder()
             texts = [
                 f"{s.name} {s.signature or ''} {s.docstring or ''}".strip()
                 for s in symbols
@@ -53,10 +57,40 @@ class Indexer:
                 )
                 self.db.conn.commit()
         except Exception:
-            pass  # embeddings are optional enhancement — never crash indexing
+            pass  # embeddings are optional — never crash indexing
+
+    def _batch_embed_all(self):
+        """Embed all indexed symbols in one batch. Called once after index_project."""
+        try:
+            from .embeddings import serialize_float32
+            embedder = self._get_embedder()
+            rows = self.db.conn.execute(
+                "SELECT id, name, signature, docstring FROM symbols"
+            ).fetchall()
+            if not rows:
+                return
+            texts = [
+                f"{r['name']} {r['signature'] or ''} {r['docstring'] or ''}".strip()
+                for r in rows
+            ]
+            vecs = embedder.encode_batch(texts)
+            with self.db._lock:
+                self.db.conn.execute("DELETE FROM vec_symbols")
+                self.db.conn.executemany(
+                    "INSERT OR REPLACE INTO vec_symbols (symbol_id, embedding) VALUES (?, ?)",
+                    [(rows[i]["id"], serialize_float32(vecs[i])) for i in range(len(rows))]
+                )
+                self.db.conn.commit()
+        except Exception:
+            pass
 
     def index_project(self, project_path: str, on_file=None, on_skip=None) -> dict:
         """Walk project directory and index all supported files."""
+        try:
+            os.nice(10)  # lower priority — don't spike user's CPU
+        except (AttributeError, OSError):
+            pass  # Windows or permission denied
+
         try:
             import gitignore_parser
             gitignore_path = os.path.join(project_path, ".gitignore")
@@ -88,7 +122,8 @@ class Indexer:
                     continue
                 t0 = time.time()
                 try:
-                    count = self.index_file(full)
+                    # embed=False: skip per-file embedding; batch at end instead
+                    count = self.index_file(full, embed=False)
                     elapsed_ms = (time.time() - t0) * 1000
                     stats["files"] += 1
                     stats["symbols"] += count
@@ -99,6 +134,9 @@ class Indexer:
                     stats["errors"] += 1
                     if on_file is not None:
                         on_file(full, 0, elapsed_ms, error=str(e))
+
+        # Single batch embed after all files indexed — model loaded once
+        self._batch_embed_all()
         return stats
 
     def ensure_fresh(self, file_path: str):
