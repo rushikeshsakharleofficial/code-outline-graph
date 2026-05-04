@@ -112,7 +112,10 @@ class SymbolParser:
 
     def _get_parser(self, language: str):
         if language not in self._parsers:
-            self._parsers[language] = get_parser(language)
+            try:
+                self._parsers[language] = get_parser(language)
+            except Exception:
+                self._parsers[language] = None  # unavailable — skip silently
         return self._parsers[language]
 
     def parse_file(self, file_path: str) -> list[Symbol]:
@@ -126,6 +129,8 @@ class SymbolParser:
 
         source = Path(file_path).read_bytes()
         parser = self._get_parser(language)
+        if parser is None:
+            return []
         tree = parser.parse(source)
 
         extractor = SymbolExtractor(source=source, language=language, file_path=file_path)
