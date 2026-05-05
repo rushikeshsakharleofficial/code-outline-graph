@@ -412,6 +412,7 @@ def cmd_update(args):
 
     updated = 0
     skipped = 0
+    checked = 0
 
     def _on_skip(_full_path: str, _reason: str) -> None:
         nonlocal skipped
@@ -422,11 +423,20 @@ def cmd_update(args):
             if indexer.is_file_current(full, size, mtime_ns):
                 skipped += 1
                 continue
-            indexer.index_file(full, language=language, file_size=size, mtime_ns=mtime_ns)
+            indexer.index_file(full, language=language, file_size=size, mtime_ns=mtime_ns, embed=False)
             updated += 1
         except Exception:
             pass
+        checked += 1
+        if checked % 50 == 0:
+            print(f"  checked {checked} files, {updated} updated...", end="\r", flush=True)
+    if checked >= 50:
+        print(" " * 60, end="\r")  # clear progress line
     print(f"Updated {updated} files, {skipped} unchanged")
+    if updated > 0:
+        print("Updating embeddings...", end=" ", flush=True)
+        indexer._batch_embed_all()
+        print("done")
 
 
 def cmd_search(args):
