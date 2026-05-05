@@ -29,6 +29,10 @@ def _quiet_hf_output():
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     warnings.filterwarnings(
         "ignore",
+        message=r".*HF_HUB_DISABLE_PROGRESS_BARS=1.*has priority\.",
+    )
+    warnings.filterwarnings(
+        "ignore",
         message=".*cache-system uses symlinks.*",
         module="huggingface_hub.file_download",
     )

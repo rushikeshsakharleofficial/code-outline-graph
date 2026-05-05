@@ -1,5 +1,7 @@
+import warnings
 from pathlib import Path
 
+from code_outline_graph import embeddings as embeddings_mod
 from code_outline_graph import indexer as indexer_mod
 from code_outline_graph.indexer import Indexer, iter_indexable_files
 from code_outline_graph.server import _read_lines
@@ -79,6 +81,15 @@ def test_read_lines_streams_requested_range(workspace_tmp):
     path.write_text("".join(f"line {i}\n" for i in range(1, 11)))
 
     assert _read_lines(str(path), 3, 5) == "line 3\nline 4\nline 5\n"
+
+
+def test_quiet_hf_output_suppresses_progress_bar_warning():
+    with warnings.catch_warnings():
+        embeddings_mod._quiet_hf_output()
+        assert any(
+            action == "ignore" and pattern and "HF_HUB_DISABLE_PROGRESS_BARS=1" in pattern.pattern
+            for action, pattern, _category, _module, _lineno in warnings.filters
+        )
 
 
 def test_index_project_skips_unchanged_files_without_parsing(monkeypatch, workspace_tmp):
