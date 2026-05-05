@@ -239,7 +239,7 @@ class Indexer:
 
     def index_project(self, project_path: str, on_file=None, on_skip=None) -> dict:
         """Walk project directory and index all supported files."""
-        stats = {"files": 0, "symbols": 0, "skipped": 0, "errors": 0}
+        stats = {"files": 0, "symbols": 0, "skipped": 0, "unchanged": 0, "errors": 0}
 
         # Phase 1: walk serially; skip callbacks stay on main thread.
         indexable: list[tuple[str, str, int, int]] = []
@@ -252,6 +252,9 @@ class Indexer:
 
         for item in iter_indexable_files(project_path, on_skip=_on_skip):
             _full, _language, size, _mtime_ns = item
+            if self.is_file_current(_full, size, _mtime_ns):
+                stats["unchanged"] += 1
+                continue
             if size >= _LARGE_FILE_THRESHOLD:
                 large_files.append(item)
             else:
@@ -285,7 +288,8 @@ class Indexer:
                             on_file(full, 0, 0, error=str(e))
 
         # Phase 3: bulk-write normal files; one FTS rebuild at the end.
-        self.db.bulk_insert_all(parse_results)
+        if parse_results:
+            self.db.bulk_insert_all(parse_results)
 
         # Phase 4: large files index in background. Keep FTS triggers live to avoid
         # a second full FTS rebuild after the normal-file bulk insert.

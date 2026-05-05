@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "code-outline": {
+      "command": "code-outline-graph",
+      "args": [
+        "serve",
+        "/home/rushikesh.sakharle/Projects/code-outline-graph"
+      ],
+      "type": "stdio"
+    }
+  }
+}

@@ -23,6 +23,15 @@ class FreshnessDB:
         self.deleted.append(file_path)
 
 
+class ProjectIndexDB(FreshnessDB):
+    def __init__(self, state):
+        super().__init__(state)
+        self.bulk_calls = []
+
+    def bulk_insert_all(self, results, rebuild_fts=True):
+        self.bulk_calls.append((results, rebuild_fts))
+
+
 def test_is_file_current_skips_checksum_when_metadata_matches(monkeypatch):
     db = FreshnessDB({"checksum": "old", "file_size": 12, "mtime_ns": 34})
     indexer = Indexer(db)
@@ -70,3 +79,33 @@ def test_read_lines_streams_requested_range(workspace_tmp):
     path.write_text("".join(f"line {i}\n" for i in range(1, 11)))
 
     assert _read_lines(str(path), 3, 5) == "line 3\nline 4\nline 5\n"
+
+
+def test_index_project_skips_unchanged_files_without_parsing(monkeypatch, workspace_tmp):
+    path = workspace_tmp / "app.py"
+    path.write_text("def kept():\n    pass\n")
+
+    db = ProjectIndexDB({"checksum": "old", "file_size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns})
+    indexer = Indexer(db)
+
+    monkeypatch.setattr(
+        indexer_mod,
+        "iter_indexable_files",
+        lambda _project_path, on_skip=None: iter(
+            [(str(path), "python", path.stat().st_size, path.stat().st_mtime_ns)]
+        ),
+    )
+    monkeypatch.setattr(
+        indexer_mod,
+        "_parse_for_index",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unchanged file should not parse")),
+    )
+    monkeypatch.setattr(Indexer, "_batch_embed_all", lambda self: None)
+
+    stats = indexer.index_project(str(workspace_tmp))
+    indexer.wait_for_embeddings()
+
+    assert stats["files"] == 0
+    assert stats["symbols"] == 0
+    assert stats["unchanged"] == 1
+    assert db.bulk_calls == []
