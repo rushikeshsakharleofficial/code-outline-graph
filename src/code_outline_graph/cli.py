@@ -27,6 +27,8 @@ This project is indexed with [code-outline-graph](https://github.com/rushikeshsa
 | `get_file_header(file)` | Imports + top-level constants only |
 | `get_symbol(name)` | Exact symbol metadata |
 | `get_line_range(file, start, end)` | Read arbitrary line slice |
+| `update_project(path?)` | Reindex changed files |
+| `prune_project(path?)` | Remove stale rows for deleted or ignored files |
 
 Fall back to direct file reads only if these return empty results.
 
@@ -248,6 +250,17 @@ def _get_db_indexer(project_path: str | None = None):
     return db, Indexer(db), db_path
 
 
+def _current_indexable_files(project_path: str, on_skip=None) -> set[str]:
+    from .indexer import iter_indexable_files
+
+    return {
+        full
+        for full, _language, _size, _mtime_ns in iter_indexable_files(
+            project_path, on_skip=on_skip
+        )
+    }
+
+
 def _show_embed_progress(indexer) -> None:
     """Render a live progress bar while the embedding thread runs."""
     if not (indexer._embed_thread and indexer._embed_thread.is_alive()):
@@ -413,26 +426,31 @@ def cmd_update(args):
     updated = 0
     skipped = 0
     checked = 0
+    errors = 0
+    current_files: set[str] = set()
 
     def _on_skip(_full_path: str, _reason: str) -> None:
         nonlocal skipped
         skipped += 1
 
     for full, language, size, mtime_ns in iter_indexable_files(path, on_skip=_on_skip):
+        current_files.add(full)
         try:
             if indexer.is_file_current(full, size, mtime_ns):
                 skipped += 1
                 continue
             indexer.index_file(full, language=language, file_size=size, mtime_ns=mtime_ns, embed=False)
             updated += 1
-        except Exception:
-            pass
+        except Exception as e:
+            errors += 1
+            print(f"Warning: failed to update {full}: {e}", file=sys.stderr)
         checked += 1
         if checked % 50 == 0:
             print(f"  checked {checked} files, {updated} updated...", end="\r", flush=True)
     if checked >= 50:
         print(" " * 60, end="\r")  # clear progress line
-    print(f"Updated {updated} files, {skipped} unchanged")
+    pruned = indexer.prune_missing_files(current_files)
+    print(f"Updated {updated} files, {skipped} unchanged, {pruned} pruned, {errors} errors")
     if updated > 0:
         print("Updating embeddings...", end=" ", flush=True)
         indexer._batch_embed_all()
@@ -442,9 +460,19 @@ def cmd_update(args):
 def cmd_search(args):
     from .search import Searcher
     db, _indexer, _db_path = _get_db_indexer(args.project)
-    results = Searcher(db).keyword_search(args.query, limit=20)
+    results = Searcher(db).keyword_search(args.query, limit=args.limit)
+    if args.kind:
+        results = [r for r in results if r["kind"] == args.kind]
+    if args.language:
+        results = [r for r in results if r["language"] == args.language]
+    if args.file:
+        file_filter = os.path.abspath(os.path.join(resolve_project_path(args.project), args.file))
+        results = [r for r in results if r["file_path"] == file_filter or args.file in r["file_path"]]
     if not results:
         print("No results.")
+        return
+    if args.json:
+        print(json.dumps(results, indent=2))
         return
     for r in results:
         parent = f"  (in {r['parent_name']})" if r.get("parent_name") else ""
@@ -486,9 +514,77 @@ def cmd_status(args):
     files = row[0] if row else 0
     row2 = db.conn.execute("SELECT COUNT(*) FROM symbols").fetchone()
     symbols = row2[0] if row2 else 0
+    row3 = db.conn.execute("SELECT COUNT(*) FROM vec_symbols").fetchone()
+    embeddings = row3[0] if row3 else 0
+    stale = sum(1 for file_path in db.list_indexed_files() if not os.path.exists(file_path))
+    languages = db.conn.execute(
+        """
+        SELECT language, COUNT(*) AS files
+        FROM indexed_files
+        GROUP BY language
+        ORDER BY files DESC, language
+        LIMIT 8
+        """
+    ).fetchall()
     print(f"Index: {files} files, {symbols} symbols")
+    print(f"Embeddings: {embeddings}")
+    print(f"Missing indexed files: {stale}")
+    if languages:
+        print("Languages: " + ", ".join(f"{r['language']}={r['files']}" for r in languages))
     print(f"Project: {path}")
     print(f"DB: {db_path}")
+
+
+def cmd_prune(args):
+    path = resolve_project_path(args.path or ".")
+    _db, indexer, _db_path = _get_db_indexer(path)
+    skipped = 0
+
+    def _on_skip(_full_path: str, _reason: str) -> None:
+        nonlocal skipped
+        skipped += 1
+
+    current_files = _current_indexable_files(path, on_skip=_on_skip)
+    removed = indexer.prune_missing_files(current_files)
+    print(f"Pruned {removed} files ({skipped} ignored/secret files skipped).")
+
+
+def cmd_doctor(args):
+    path = resolve_project_path(args.path or ".")
+    db = None
+    ok = True
+    print(f"Project: {path}")
+    print(f"Exists: {'yes' if os.path.isdir(path) else 'no'}")
+    db_path = ensure_project_db_path(path)
+    print(f"DB: {db_path}")
+    try:
+        from .db import Database
+        db = Database(db_path)
+        print("SQLite/sqlite-vec: ok")
+    except Exception as e:
+        ok = False
+        print(f"SQLite/sqlite-vec: failed ({e})")
+    try:
+        from .parser import SymbolParser
+        SymbolParser()._get_parser("python")
+        print("tree-sitter python parser: ok")
+    except Exception as e:
+        ok = False
+        print(f"tree-sitter python parser: failed ({e})")
+    try:
+        __import__("fastembed")
+        print("embeddings: ok")
+    except Exception as e:
+        print(f"embeddings: unavailable ({e})")
+    for rel in [".mcp.json", ".cursor/mcp.json", ".codex/config.toml", ".claude/settings.json", ".gemini/settings.json"]:
+        config_path = os.path.join(path, rel)
+        print(f"{rel}: {'found' if os.path.exists(config_path) else 'missing'}")
+    if db is not None:
+        stale = sum(1 for file_path in db.list_indexed_files() if not os.path.exists(file_path))
+        print(f"Missing indexed files: {stale}")
+        db.close()
+    if not ok:
+        sys.exit(1)
 
 
 def cmd_install_skill(_args):
@@ -547,6 +643,11 @@ def main():
 
     p_search = sub.add_parser("search", help="Search symbols by keyword")
     p_search.add_argument("--project", default=".", help="Project path (default: cwd)")
+    p_search.add_argument("--kind", help="Filter by symbol kind")
+    p_search.add_argument("--language", help="Filter by language")
+    p_search.add_argument("--file", help="Filter by file path substring or relative path")
+    p_search.add_argument("--limit", type=int, default=20, help="Maximum results (default: 20)")
+    p_search.add_argument("--json", action="store_true", help="Emit JSON")
     p_search.add_argument("query", help="Search query")
 
     p_outline = sub.add_parser("outline", help="List symbols in a file")
@@ -555,6 +656,12 @@ def main():
 
     p_status = sub.add_parser("status", help="Show index stats")
     p_status.add_argument("path", nargs="?", default=".", help="Project path")
+
+    p_prune = sub.add_parser("prune", help="Remove stale index rows for deleted or ignored files")
+    p_prune.add_argument("path", nargs="?", default=".", help="Project path")
+
+    p_doctor = sub.add_parser("doctor", help="Check parser, DB, embedding, and MCP config health")
+    p_doctor.add_argument("path", nargs="?", default=".", help="Project path")
 
     p_serve = sub.add_parser("serve", help="Start MCP server (stdio)")
     p_serve.add_argument("project", nargs="?", default=".", help="Project path (default: cwd)")
@@ -573,6 +680,10 @@ def main():
         cmd_outline(args)
     elif args.command == "status":
         cmd_status(args)
+    elif args.command == "prune":
+        cmd_prune(args)
+    elif args.command == "doctor":
+        cmd_doctor(args)
     elif args.command == "serve" or args.command is None:
         cmd_serve(args)
     elif args.command == "install-skill":

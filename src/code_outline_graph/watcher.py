@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 import time
 from watchdog.observers import Observer
@@ -24,7 +25,7 @@ class CodeChangeHandler(FileSystemEventHandler):
 
     def on_deleted(self, event):
         if not event.is_directory:
-            self.indexer.db.delete_symbols_for_file(event.src_path)
+            self.indexer.db.delete_symbols_for_file(os.path.abspath(event.src_path))
 
     def _schedule(self, path: str):
         if not detect_language(path):
@@ -43,9 +44,12 @@ class CodeChangeHandler(FileSystemEventHandler):
             self._pending.clear()
         for path in paths:
             try:
-                self.indexer.index_file(path)
-            except Exception:
-                pass
+                if os.path.exists(path):
+                    self.indexer.index_file(path)
+                else:
+                    self.indexer.db.delete_symbols_for_file(os.path.abspath(path))
+            except Exception as e:
+                print(f"code-outline-graph watcher: failed to update {path}: {e}", file=sys.stderr)
 
 
 class GitHeadHandler(FileSystemEventHandler):
@@ -74,8 +78,8 @@ class GitHeadHandler(FileSystemEventHandler):
     def _reindex(self):
         try:
             self.indexer.index_project(self.project_path)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"code-outline-graph watcher: failed to reindex {self.project_path}: {e}", file=sys.stderr)
 
 
 class CodeWatcher:

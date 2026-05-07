@@ -24,6 +24,9 @@ class FreshnessDB:
     def delete_symbols_for_file(self, file_path):
         self.deleted.append(file_path)
 
+    def list_indexed_files(self):
+        return []
+
 
 class ProjectIndexDB(FreshnessDB):
     def __init__(self, state):
@@ -120,3 +123,38 @@ def test_index_project_skips_unchanged_files_without_parsing(monkeypatch, worksp
     assert stats["symbols"] == 0
     assert stats["unchanged"] == 1
     assert db.bulk_calls == []
+
+
+def test_prune_missing_files_deletes_stale_rows():
+    db = FreshnessDB({})
+    db.list_indexed_files = lambda: ["kept.py", "deleted.py"]
+    indexer = Indexer(db)
+
+    assert indexer.prune_missing_files({"kept.py"}) == 1
+    assert db.deleted == ["deleted.py"]
+
+
+def test_index_project_prunes_deleted_files(monkeypatch, workspace_tmp):
+    kept = workspace_tmp / "kept.py"
+    deleted = workspace_tmp / "deleted.py"
+    kept.write_text("def kept():\n    pass\n")
+
+    db = ProjectIndexDB(None)
+    db.list_indexed_files = lambda: [str(kept), str(deleted)]
+    indexer = Indexer(db)
+
+    monkeypatch.setattr(
+        indexer_mod,
+        "iter_indexable_files",
+        lambda _project_path, on_skip=None: iter(
+            [(str(kept), "python", kept.stat().st_size, kept.stat().st_mtime_ns)]
+        ),
+    )
+    monkeypatch.setattr(indexer_mod, "_parse_for_index", lambda *args, **kwargs: ([], "sum", "python", 0, 0, 0))
+    monkeypatch.setattr(Indexer, "_batch_embed_all", lambda self: None)
+
+    stats = indexer.index_project(str(workspace_tmp))
+    indexer.wait_for_embeddings()
+
+    assert stats["pruned"] == 1
+    assert db.deleted == [str(deleted)]

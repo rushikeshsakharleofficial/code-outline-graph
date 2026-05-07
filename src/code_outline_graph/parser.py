@@ -1,5 +1,7 @@
 """Tree-sitter-based multi-language symbol parser."""
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Optional
 

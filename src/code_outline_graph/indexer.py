@@ -237,6 +237,15 @@ class Indexer:
         if self._embed_thread and self._embed_thread.is_alive():
             self._embed_thread.join()
 
+    def prune_missing_files(self, current_files: set[str]) -> int:
+        """Remove DB rows for indexed files no longer in the project walk."""
+        removed = 0
+        for file_path in self.db.list_indexed_files():
+            if file_path not in current_files:
+                self.db.delete_symbols_for_file(file_path)
+                removed += 1
+        return removed
+
     def index_project(self, project_path: str, on_file=None, on_skip=None) -> dict:
         """Walk project directory and index all supported files."""
         stats = {"files": 0, "symbols": 0, "skipped": 0, "unchanged": 0, "errors": 0}
@@ -244,6 +253,7 @@ class Indexer:
         # Phase 1: walk serially; skip callbacks stay on main thread.
         indexable: list[tuple[str, str, int, int]] = []
         large_files: list[tuple[str, str, int, int]] = []
+        current_files: set[str] = set()
 
         def _on_skip(full_path: str, reason: str) -> None:
             stats["skipped"] += 1
@@ -252,6 +262,7 @@ class Indexer:
 
         for item in iter_indexable_files(project_path, on_skip=_on_skip):
             _full, _language, size, _mtime_ns = item
+            current_files.add(_full)
             if self.is_file_current(_full, size, _mtime_ns):
                 stats["unchanged"] += 1
                 continue
@@ -259,6 +270,8 @@ class Indexer:
                 large_files.append(item)
             else:
                 indexable.append(item)
+
+        stats["pruned"] = self.prune_missing_files(current_files)
 
         # Phase 2: parse normal files in parallel; no DB writes or lock contention.
         _cb_lock = threading.Lock()

@@ -70,12 +70,14 @@ code-outline-graph build .
 | `code-outline-graph search <query>` | Search symbols by keyword |
 | `code-outline-graph outline <file>` | List all symbols in a file |
 | `code-outline-graph status [path]` | Show index stats |
+| `code-outline-graph prune [path]` | Remove stale rows for deleted or ignored files |
+| `code-outline-graph doctor [path]` | Check DB, parser, embeddings, and MCP config health |
 | `code-outline-graph serve [path]` | Start MCP server (stdio) |
 | `code-outline-graph install-skill` | Install Claude Code skill to `~/.claude/skills/` |
 
 ## MCP Tools
 
-The server exposes 10 tools to AI assistants:
+The server exposes 11 tools to AI assistants:
 
 | Tool | Description |
 |------|-------------|
@@ -89,6 +91,7 @@ The server exposes 10 tools to AI assistants:
 | `get_line_range` | Read arbitrary line slice from a file |
 | `index_project` | Index a directory and start file watcher |
 | `update_project` | Reindex only changed files (faster than `index_project`) |
+| `prune_project` | Remove stale index rows for deleted or ignored files |
 
 ### Confirm-Before-Read Protocol
 
@@ -130,17 +133,17 @@ Terraform/HCL, Protobuf, GraphQL, Makefile, Dockerfile
 
 ```
 cli.py          CLI entry point — build/update/search/outline/status/serve
-server.py       MCP server — 9 tools, file watcher lifecycle
+server.py       MCP server — tools, file watcher lifecycle
 indexer.py      Orchestrates parse → checksum → DB upsert → embeddings
 parser.py       tree-sitter parsing → Symbol extraction per language
 db.py           SQLite + sqlite-vec — symbols table + FTS5 + vector index
 search.py       FTS search, keyword search, vector search, resolve_edit_target
 watcher.py      watchdog file watcher — debounced reindex + git HEAD tracking
 embeddings.py   fastembed vector embeddings for semantic search
-paths.py        Per-project DB path resolution (~/.cache/code-outline-graph/)
+paths.py        Per-project DB path resolution (.code-outline-graph/index.db)
 ```
 
-Each project gets its own SQLite DB at `~/.cache/code-outline-graph/<hash>/vectors.db`. The watcher reindexes files on save and reindexes the whole project on git branch switches.
+Each project gets its own SQLite DB at `.code-outline-graph/index.db` inside the project. The watcher reindexes files on save, removes symbols for deleted files, and reindexes the whole project on git branch switches.
 
 ## MCP Configuration
 

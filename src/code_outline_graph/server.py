@@ -71,6 +71,8 @@ async def list_tools():
             inputSchema={"type":"object","properties":{"file":{"type":"string"}},"required":["file"]}),
         types.Tool(name="update_project", description="Reindex only changed files in the active project (faster than index_project)",
             inputSchema={"type":"object","properties":{"path":{"type":"string"}},"required":[]}),
+        types.Tool(name="prune_project", description="Remove stale index rows for deleted or ignored files",
+            inputSchema={"type":"object","properties":{"path":{"type":"string"}},"required":[]}),
     ]
 
 
@@ -156,24 +158,47 @@ async def call_tool(name: str, arguments: dict):
 
     elif name == "update_project":
         project_path = resolve_project_path(arguments.get("path") or _active_project_path)
+        db, indexer, searcher = _get_components(project_path)
         updated = 0
         skipped = 0
         errors = 0
+        current_files: set[str] = set()
+        error_details: list[dict] = []
 
         def _on_skip(_full_path: str, _reason: str) -> None:
             nonlocal skipped
             skipped += 1
 
         for full, language, size, mtime_ns in iter_indexable_files(project_path, on_skip=_on_skip):
+            current_files.add(full)
             try:
                 if indexer.is_file_current(full, size, mtime_ns):
                     skipped += 1
                     continue
                 indexer.index_file(full, language=language, file_size=size, mtime_ns=mtime_ns)
                 updated += 1
-            except Exception:
+            except Exception as e:
                 errors += 1
-        return [types.TextContent(type="text", text=json.dumps({"updated": updated, "skipped": skipped, "errors": errors}))]
+                if len(error_details) < 10:
+                    error_details.append({"file": full, "error": str(e)})
+        pruned = indexer.prune_missing_files(current_files)
+        return [types.TextContent(type="text", text=json.dumps({
+            "updated": updated,
+            "skipped": skipped,
+            "pruned": pruned,
+            "errors": errors,
+            "error_details": error_details,
+        }))]
+
+    elif name == "prune_project":
+        project_path = resolve_project_path(arguments.get("path") or _active_project_path)
+        db, indexer, searcher = _get_components(project_path)
+        current_files = {
+            full
+            for full, _language, _size, _mtime_ns in iter_indexable_files(project_path)
+        }
+        pruned = indexer.prune_missing_files(current_files)
+        return [types.TextContent(type="text", text=json.dumps({"pruned": pruned}))]
 
     return [types.TextContent(type="text", text=json.dumps({"error":"unknown_tool","tool":name}))]
 

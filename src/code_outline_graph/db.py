@@ -303,6 +303,12 @@ class Database:
                     (file_path,),
                 )
 
+    def list_indexed_files(self) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT file_path FROM indexed_files ORDER BY file_path"
+        ).fetchall()
+        return [row["file_path"] for row in rows]
+
     def get_symbols_by_file(self, file_path: str) -> list[Symbol]:
         rows = self.conn.execute(
             """
