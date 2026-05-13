@@ -92,7 +92,7 @@ list_outline({"file": "src/components/ShiftCard.js"})
 code-outline-graph update .
 ```
 
-This keeps the index current so future symbol lookups reflect your changes. If the MCP server is running, the file watcher handles this automatically — but always run it manually after bulk edits or when unsure.
+This keeps the index current so future symbol lookups reflect your changes. The MCP file watcher is opt-in, so run this manually after edits unless the server was started with `--watch`.
 
 ---
 
@@ -109,9 +109,12 @@ Only if:
 
 ```bash
 code-outline-graph build .          # index project + write .mcp.json + Codex + Gemini configs
+code-outline-graph build --embeddings .  # opt in to semantic vectors
 code-outline-graph update .         # reindex changed files
+code-outline-graph update --embeddings . # also refresh semantic vectors
 code-outline-graph search <query>   # search from terminal
 code-outline-graph outline <file>   # show file symbols
 code-outline-graph status           # show index stats
+code-outline-graph serve --watch .  # opt in to file watching
 code-outline-graph install-skill    # install this skill to ~/.claude/skills/
 ```

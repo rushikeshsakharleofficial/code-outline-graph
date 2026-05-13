@@ -66,13 +66,16 @@ code-outline-graph build .
 | Command | Description |
 |---------|-------------|
 | `code-outline-graph build [path]` | Index project + write MCP configs for all clients |
+| `code-outline-graph build --embeddings [path]` | Also build semantic vector embeddings |
 | `code-outline-graph update [path]` | Reindex changed files only |
+| `code-outline-graph update --embeddings [path]` | Reindex changed files and refresh embeddings |
 | `code-outline-graph search <query>` | Search symbols by keyword |
 | `code-outline-graph outline <file>` | List all symbols in a file |
 | `code-outline-graph status [path]` | Show index stats |
 | `code-outline-graph prune [path]` | Remove stale rows for deleted or ignored files |
 | `code-outline-graph doctor [path]` | Check DB, parser, embeddings, and MCP config health |
-| `code-outline-graph serve [path]` | Start MCP server (stdio) |
+| `code-outline-graph serve [path]` | Start MCP server (stdio), watcher off by default |
+| `code-outline-graph serve --watch [path]` | Start MCP server with file watching |
 | `code-outline-graph install-skill` | Install Claude Code skill to `~/.claude/skills/` |
 
 ## MCP Tools
@@ -89,7 +92,7 @@ The server exposes 11 tools to AI assistants:
 | `get_symbol` | Exact symbol metadata by name |
 | `find_by_keyword` | Keyword search across all symbol names |
 | `get_line_range` | Read arbitrary line slice from a file |
-| `index_project` | Index a directory and start file watcher |
+| `index_project` | Index a directory; pass `watch: true` to start file watcher |
 | `update_project` | Reindex only changed files (faster than `index_project`) |
 | `prune_project` | Remove stale index rows for deleted or ignored files |
 
@@ -133,17 +136,26 @@ Terraform/HCL, Protobuf, GraphQL, Makefile, Dockerfile
 
 ```
 cli.py          CLI entry point — build/update/search/outline/status/serve
-server.py       MCP server — tools, file watcher lifecycle
+server.py       MCP server — tools, optional file watcher lifecycle
 indexer.py      Orchestrates parse → checksum → DB upsert → embeddings
 parser.py       tree-sitter parsing → Symbol extraction per language
 db.py           SQLite + sqlite-vec — symbols table + FTS5 + vector index
 search.py       FTS search, keyword search, vector search, resolve_edit_target
-watcher.py      watchdog file watcher — debounced reindex + git HEAD tracking
+watcher.py      watchdog file watcher — debounced file-level reindex
 embeddings.py   fastembed vector embeddings for semantic search
 paths.py        Per-project DB path resolution (.code-outline-graph/index.db)
 ```
 
-Each project gets its own SQLite DB at `.code-outline-graph/index.db` inside the project. The watcher reindexes files on save, removes symbols for deleted files, and reindexes the whole project on git branch switches.
+Each project gets its own SQLite DB at `.code-outline-graph/index.db` inside the project. The watcher is opt-in and only reindexes changed files on save or removes symbols for deleted files. Git branch switches no longer trigger a full project reindex automatically.
+
+## Large Codebases
+
+The default runtime is conservative so AI-assisted sessions do not saturate the machine:
+
+- Parser workers default to `min(4, cpu_count)`; override with `CODE_OUTLINE_INDEX_WORKERS=2` or `build --workers 2`.
+- Embeddings are disabled by default; enable with `--embeddings` or `CODE_OUTLINE_ENABLE_EMBEDDINGS=1`.
+- Files >=512KB are skipped by default; enable background indexing with `--background-large-files` or `CODE_OUTLINE_BACKGROUND_LARGE_FILES=1`.
+- File watching is disabled by default; enable with `serve --watch` or `CODE_OUTLINE_WATCH=1` for MCP `index_project`.
 
 ## MCP Configuration
 

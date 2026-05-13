@@ -38,21 +38,26 @@ def test_build_uses_project_db_and_writes_project_aware_mcp_config(workspace_tmp
     config = json.loads((workspace_tmp / ".mcp.json").read_text())
     cursor_config = json.loads((workspace_tmp / ".cursor" / "mcp.json").read_text())
     antigravity_config = json.loads(antigravity_path.read_text())
+    gemini_config = json.loads((workspace_tmp / ".gemini" / "settings.json").read_text())
 
     assert calls["project_path"] == project_path
     assert fake_indexer.indexed_path == project_path
     assert config["mcpServers"]["code-outline"] == {
         "command": "code-outline-graph",
-        "args": ["serve", project_path],
+        "args": ["serve", "--no-watch", project_path],
     }
     assert cursor_config["mcpServers"]["code-outline"] == {
         "command": "code-outline-graph",
-        "args": ["serve", project_path],
+        "args": ["serve", "--no-watch", project_path],
         "type": "stdio",
     }
     assert antigravity_config["mcpServers"]["code-outline"] == {
         "command": "code-outline-graph",
-        "args": ["serve", project_path],
+        "args": ["serve", "--no-watch", project_path],
+    }
+    assert gemini_config["mcpServers"]["code-outline"] == {
+        "command": "code-outline-graph",
+        "args": ["serve", "--no-watch"],
     }
 
 
@@ -100,8 +105,8 @@ def test_build_preserves_existing_mcp_servers(workspace_tmp, monkeypatch):
     antigravity_config = json.loads(antigravity_path.read_text())
 
     assert config["mcpServers"]["other"]["command"] == "other-tool"
-    assert config["mcpServers"]["code-outline"]["args"] == ["serve", str(workspace_tmp)]
+    assert config["mcpServers"]["code-outline"]["args"] == ["serve", "--no-watch", str(workspace_tmp)]
     assert cursor_config["mcpServers"]["cursor-other"]["command"] == "cursor-tool"
     assert cursor_config["mcpServers"]["code-outline"]["type"] == "stdio"
     assert antigravity_config["mcpServers"]["antigravity-other"]["command"] == "anti-tool"
-    assert antigravity_config["mcpServers"]["code-outline"]["args"] == ["serve", str(workspace_tmp)]
+    assert antigravity_config["mcpServers"]["code-outline"]["args"] == ["serve", "--no-watch", str(workspace_tmp)]

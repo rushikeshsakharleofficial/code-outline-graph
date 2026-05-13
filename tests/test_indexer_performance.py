@@ -158,3 +158,58 @@ def test_index_project_prunes_deleted_files(monkeypatch, workspace_tmp):
 
     assert stats["pruned"] == 1
     assert db.deleted == [str(deleted)]
+
+
+def test_index_project_disables_embeddings_by_default(monkeypatch, workspace_tmp):
+    path = workspace_tmp / "app.py"
+    path.write_text("def kept():\n    pass\n")
+
+    db = ProjectIndexDB(None)
+    indexer = Indexer(db)
+
+    monkeypatch.setattr(
+        indexer_mod,
+        "iter_indexable_files",
+        lambda _project_path, on_skip=None: iter(
+            [(str(path), "python", path.stat().st_size, path.stat().st_mtime_ns)]
+        ),
+    )
+    monkeypatch.setattr(indexer_mod, "_parse_for_index", lambda *args, **kwargs: ([], "sum", "python", 0, 0, 0))
+    monkeypatch.setattr(
+        Indexer,
+        "_batch_embed_all",
+        lambda self: (_ for _ in ()).throw(AssertionError("embeddings should be opt-in")),
+    )
+
+    stats = indexer.index_project(str(workspace_tmp), max_workers=1)
+
+    assert stats["embeddings"] == "disabled"
+    assert db.bulk_calls
+
+
+def test_index_project_skips_large_files_by_default(monkeypatch, workspace_tmp):
+    path = workspace_tmp / "large.py"
+    path.write_text("def kept():\n    pass\n")
+
+    db = ProjectIndexDB(None)
+    indexer = Indexer(db)
+
+    monkeypatch.setattr(indexer_mod, "_LARGE_FILE_THRESHOLD", 1)
+    monkeypatch.setattr(
+        indexer_mod,
+        "iter_indexable_files",
+        lambda _project_path, on_skip=None: iter(
+            [(str(path), "python", path.stat().st_size, path.stat().st_mtime_ns)]
+        ),
+    )
+    monkeypatch.setattr(
+        indexer_mod,
+        "_parse_for_index",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("large file should be skipped")),
+    )
+
+    stats = indexer.index_project(str(workspace_tmp), max_workers=1)
+
+    assert stats["large_skipped"] == 1
+    assert stats["large_deferred"] == 0
+    assert db.bulk_calls == []

@@ -31,6 +31,31 @@ _SECRET_FILES = frozenset({".env", ".env.local", ".env.production", ".env.develo
 _SKIP_DIRS = frozenset({"node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"})
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _default_worker_count() -> int:
+    raw = os.environ.get("CODE_OUTLINE_INDEX_WORKERS")
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return max(1, min(4, os.cpu_count() or 1))
+
+
+def _embeddings_enabled() -> bool:
+    return _env_bool("CODE_OUTLINE_ENABLE_EMBEDDINGS", False)
+
+
+def _background_large_files_enabled() -> bool:
+    return _env_bool("CODE_OUTLINE_BACKGROUND_LARGE_FILES", False)
+
+
 def file_metadata(file_path: str) -> tuple[int, int]:
     stat = os.stat(file_path)
     return stat.st_size, stat.st_mtime_ns
@@ -98,9 +123,25 @@ def _parse_for_index(
 
 
 class Indexer:
-    def __init__(self, db: Database):
+    def __init__(
+        self,
+        db: Database,
+        *,
+        enable_embeddings: bool | None = None,
+        max_workers: int | None = None,
+        background_large_files: bool | None = None,
+    ):
         self.db = db
         self.parser = SymbolParser()
+        self.enable_embeddings = (
+            _embeddings_enabled() if enable_embeddings is None else enable_embeddings
+        )
+        self.max_workers = _default_worker_count() if max_workers is None else max(1, max_workers)
+        self.background_large_files = (
+            _background_large_files_enabled()
+            if background_large_files is None
+            else background_large_files
+        )
         self._embedder = None  # lazy singleton, loaded once and reused
         self._embed_thread: threading.Thread | None = None
         self._large_file_thread: threading.Thread | None = None
@@ -116,7 +157,7 @@ class Indexer:
     def index_file(
         self,
         file_path: str,
-        embed: bool = True,
+        embed: bool | None = None,
         language: str | None = None,
         file_size: int | None = None,
         mtime_ns: int | None = None,
@@ -129,7 +170,8 @@ class Indexer:
             file_path, language, file_size, mtime_ns
         )
         self.db.insert_symbols(symbols, file_path, checksum, lang, file_size, mtime_ns)
-        if embed:
+        should_embed = self.enable_embeddings if embed is None else embed
+        if should_embed:
             self._update_embeddings_for_file(file_path)
         return len(symbols)
 
@@ -246,9 +288,24 @@ class Indexer:
                 removed += 1
         return removed
 
-    def index_project(self, project_path: str, on_file=None, on_skip=None) -> dict:
+    def index_project(
+        self,
+        project_path: str,
+        on_file=None,
+        on_skip=None,
+        *,
+        embed: bool | None = None,
+        max_workers: int | None = None,
+        background_large_files: bool | None = None,
+    ) -> dict:
         """Walk project directory and index all supported files."""
         stats = {"files": 0, "symbols": 0, "skipped": 0, "unchanged": 0, "errors": 0}
+        should_embed = self.enable_embeddings if embed is None else embed
+        should_background_large = (
+            self.background_large_files
+            if background_large_files is None
+            else background_large_files
+        )
 
         # Phase 1: walk serially; skip callbacks stay on main thread.
         indexable: list[tuple[str, str, int, int]] = []
@@ -275,7 +332,8 @@ class Indexer:
 
         # Phase 2: parse normal files in parallel; no DB writes or lock contention.
         _cb_lock = threading.Lock()
-        n_workers = min(32, (os.cpu_count() or 4) * 4)
+        n_workers = max(1, max_workers or self.max_workers)
+        stats["workers"] = n_workers
         parse_results: list[tuple] = []
 
         def _parse_only(item: tuple[str, str, int, int]):
@@ -304,10 +362,11 @@ class Indexer:
         if parse_results:
             self.db.bulk_insert_all(parse_results)
 
-        # Phase 4: large files index in background. Keep FTS triggers live to avoid
-        # a second full FTS rebuild after the normal-file bulk insert.
-        stats["large_deferred"] = len(large_files)
-        if large_files:
+        # Phase 4: large files are skipped by default to avoid surprise load on
+        # large repos. Opt in with CODE_OUTLINE_BACKGROUND_LARGE_FILES=1.
+        stats["large_deferred"] = len(large_files) if should_background_large else 0
+        stats["large_skipped"] = 0 if should_background_large else len(large_files)
+        if large_files and should_background_large:
 
             def _index_large_files():
                 large_results = []
@@ -328,11 +387,13 @@ class Indexer:
             )
             self._large_file_thread.start()
 
-        # Embed in background; do not block return on large codebases.
-        if self._embed_thread and self._embed_thread.is_alive():
-            self._embed_thread.join(timeout=1)
-        self._embed_thread = threading.Thread(target=self._batch_embed_all, daemon=True)
-        self._embed_thread.start()
+        stats["embeddings"] = "enabled" if should_embed else "disabled"
+        if should_embed:
+            # Embed in background; do not block return on large codebases.
+            if self._embed_thread and self._embed_thread.is_alive():
+                self._embed_thread.join(timeout=1)
+            self._embed_thread = threading.Thread(target=self._batch_embed_all, daemon=True)
+            self._embed_thread.start()
         return stats
 
     def ensure_fresh(self, file_path: str):

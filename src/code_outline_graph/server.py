@@ -19,6 +19,11 @@ _configured_project_path: str | None = None
 _active_project_path: str | None = None
 
 
+def _watch_enabled() -> bool:
+    value = os.environ.get("CODE_OUTLINE_WATCH", "0")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def configure_project(project_path: str | None = None) -> None:
     global _configured_project_path
     _configured_project_path = resolve_project_path(project_path)
@@ -50,8 +55,8 @@ app = Server("code-outline-graph")
 @app.list_tools()
 async def list_tools():
     return [
-        types.Tool(name="index_project", description="Index a project directory and start file watcher",
-            inputSchema={"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
+        types.Tool(name="index_project", description="Index a project directory; pass watch=true to start file watcher",
+            inputSchema={"type":"object","properties":{"path":{"type":"string"},"watch":{"type":"boolean"}},"required":["path"]}),
         types.Tool(name="list_outline", description="List all symbols in a file with line ranges",
             inputSchema={"type":"object","properties":{"file":{"type":"string"}},"required":["file"]}),
         types.Tool(name="get_symbol", description="Get symbol metadata by name",
@@ -87,8 +92,9 @@ async def call_tool(name: str, arguments: dict):
             _watcher = None
         db, indexer, searcher = _get_components(path)
         stats = indexer.index_project(path)
-        _watcher = CodeWatcher(indexer, path)
-        _watcher.start()
+        if arguments.get("watch", _watch_enabled()):
+            _watcher = CodeWatcher(indexer, path)
+            _watcher.start()
         return [types.TextContent(type="text", text=json.dumps(stats))]
 
     db, indexer, searcher = _get_components()

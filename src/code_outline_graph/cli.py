@@ -58,7 +58,7 @@ def _upsert_instruction_block(project_path: str, filename: str) -> None:
 
 
 def _stdio_server_config(project_path: str, include_type: bool = False) -> dict:
-    config = {"command": "code-outline-graph", "args": ["serve", project_path]}
+    config = {"command": "code-outline-graph", "args": ["serve", "--no-watch", project_path]}
     if include_type:
         config["type"] = "stdio"
     return config
@@ -118,7 +118,7 @@ def _write_codex_config(project_path: str) -> None:
     config_path = os.path.join(codex_dir, "config.toml")
     try:
         os.makedirs(codex_dir, exist_ok=True)
-        entry = '[mcp_servers.code-outline]\ncommand = "code-outline-graph"\nargs = ["serve"]\n'
+        entry = '[mcp_servers.code-outline]\ncommand = "code-outline-graph"\nargs = ["serve", "--no-watch"]\n'
         if os.path.exists(config_path):
             with open(config_path) as f:
                 existing = f.read()
@@ -188,7 +188,10 @@ def _write_gemini_config(project_path: str) -> None:
         else:
             config = {}
         config.setdefault("mcpServers", {})
-        config["mcpServers"]["code-outline"] = {"command": "code-outline-graph", "args": ["serve"]}
+        config["mcpServers"]["code-outline"] = {
+            "command": "code-outline-graph",
+            "args": ["serve", "--no-watch"],
+        }
         config.setdefault("hooks", {})
         for event, entry in [("SessionStart", session_entry), ("AfterTool", after_tool_entry)]:
             config["hooks"].setdefault(event, [])
@@ -362,7 +365,17 @@ def cmd_build(args):
         _print_msg(skip_msg)
         _render_bar("", _live_stats)
 
-    stats = indexer.index_project(path, on_file=_on_file, on_skip=_on_skip)
+    enable_embeddings = getattr(args, "embeddings", None)
+    workers = getattr(args, "workers", None)
+    background_large_files = getattr(args, "background_large_files", None)
+    stats = indexer.index_project(
+        path,
+        on_file=_on_file,
+        on_skip=_on_skip,
+        embed=enable_embeddings,
+        max_workers=workers,
+        background_large_files=background_large_files,
+    )
 
     # Print final completed bar (100%, Done!)
     elapsed_index = _time.time() - _start_time
@@ -375,6 +388,9 @@ def cmd_build(args):
     skipped_line = f"      Skipped: {stats['skipped']}  •  Errors: {stats.get('errors', 0)}  •  Time: {elapsed_index:.1f}s"
     if stats.get("large_deferred"):
         skipped_line += f"  •  Large files (background): {stats['large_deferred']}"
+    if stats.get("large_skipped"):
+        skipped_line += f"  •  Large files skipped: {stats['large_skipped']}"
+    skipped_line += f"  •  Workers: {stats.get('workers', '?')}"
     print(skipped_line)
 
     # Dir summaries
@@ -405,8 +421,11 @@ def cmd_build(args):
     print("\n[7/7] Installing Claude Code skill...")
     cmd_install_skill(None)
 
-    _show_embed_progress(indexer)
-    indexer.wait_for_embeddings()
+    if stats.get("embeddings") == "enabled":
+        _show_embed_progress(indexer)
+        indexer.wait_for_embeddings()
+    else:
+        print("\n[+] Embeddings disabled (use --embeddings to enable semantic vectors)")
 
     # Footer box
     _total_elapsed = _time.time() - _start_time
@@ -451,10 +470,12 @@ def cmd_update(args):
         print(" " * 60, end="\r")  # clear progress line
     pruned = indexer.prune_missing_files(current_files)
     print(f"Updated {updated} files, {skipped} unchanged, {pruned} pruned, {errors} errors")
-    if updated > 0:
+    if updated > 0 and getattr(args, "embeddings", False):
         print("Updating embeddings...", end=" ", flush=True)
         indexer._batch_embed_all()
         print("done")
+    elif updated > 0:
+        print("Embeddings disabled (use --embeddings to update semantic vectors)")
 
 
 def cmd_search(args):
@@ -617,7 +638,8 @@ def cmd_serve(_args):
         configure_project(project)
 
         db_path = project_db_path(project)
-        if os.path.exists(db_path):
+        watch = getattr(_args, "watch", False)
+        if os.path.exists(db_path) and watch:
             db, indexer, searcher = _get_components(project)
             server_mod._watcher = CodeWatcher(indexer, project)
             server_mod._watcher.start()
@@ -637,9 +659,31 @@ def main():
 
     p_build = sub.add_parser("build", help="Index project and add to .mcp.json")
     p_build.add_argument("path", nargs="?", default=".", help="Project path (default: cwd)")
+    p_build.add_argument(
+        "--embeddings",
+        action="store_true",
+        default=None,
+        help="Build semantic vector embeddings after indexing (default: off)",
+    )
+    p_build.add_argument(
+        "--workers",
+        type=int,
+        help="Parser worker count (default: CODE_OUTLINE_INDEX_WORKERS or up to 4)",
+    )
+    p_build.add_argument(
+        "--background-large-files",
+        action="store_true",
+        default=None,
+        help="Index files >=512KB in the background (default: skip)",
+    )
 
     p_update = sub.add_parser("update", help="Reindex changed files only")
     p_update.add_argument("path", nargs="?", default=".", help="Project path (default: cwd)")
+    p_update.add_argument(
+        "--embeddings",
+        action="store_true",
+        help="Update semantic vector embeddings after changed files",
+    )
 
     p_search = sub.add_parser("search", help="Search symbols by keyword")
     p_search.add_argument("--project", default=".", help="Project path (default: cwd)")
@@ -665,6 +709,18 @@ def main():
 
     p_serve = sub.add_parser("serve", help="Start MCP server (stdio)")
     p_serve.add_argument("project", nargs="?", default=".", help="Project path (default: cwd)")
+    p_serve.add_argument(
+        "--watch",
+        action="store_true",
+        help="Watch files and update the index automatically",
+    )
+    p_serve.add_argument(
+        "--no-watch",
+        action="store_false",
+        dest="watch",
+        help="Disable file watching (default)",
+    )
+    p_serve.set_defaults(watch=False)
 
     sub.add_parser("install-skill", help="Install Claude Code skill to ~/.claude/skills/")
 
