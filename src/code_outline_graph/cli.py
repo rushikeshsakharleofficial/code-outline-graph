@@ -608,6 +608,32 @@ def cmd_doctor(args):
         sys.exit(1)
 
 
+def cmd_install(args):
+    path = resolve_project_path(args.path or ".")
+    print(f"Installing MCP configs for {path} ...")
+
+    print("\n[1/5] Writing MCP configs (Claude/Cursor/Antigravity)...")
+    _write_project_mcp_config(path)
+    _write_cursor_config(path)
+    _write_antigravity_config(path)
+
+    print("\n[2/5] Writing Codex CLI config + hooks...")
+    _write_codex_config(path)
+    _write_codex_hooks(path)
+
+    print("\n[3/5] Writing Gemini CLI config + hooks...")
+    _write_gemini_config(path)
+
+    print("\n[4/5] Writing Claude Code SessionStart + PostToolUse hooks...")
+    _write_claude_hooks(path)
+
+    print("\n[5/5] Writing AI instruction blocks (AGENTS.md, GEMINI.md)...")
+    _upsert_instruction_block(path, "AGENTS.md")
+    _upsert_instruction_block(path, "GEMINI.md")
+
+    print("\nInstall complete. Run 'code-outline-graph build .' to index symbols.")
+
+
 def cmd_install_skill(_args):
     import shutil
     skill_src_dir = os.path.join(os.path.dirname(__file__), "skill")
@@ -722,12 +748,17 @@ def main():
     )
     p_serve.set_defaults(watch=False)
 
+    p_install = sub.add_parser("install", help="Write MCP configs and hooks for a project (no reindex)")
+    p_install.add_argument("path", nargs="?", default=".", help="Project path (default: cwd)")
+
     sub.add_parser("install-skill", help="Install Claude Code skill to ~/.claude/skills/")
 
     args = parser.parse_args()
 
     if args.command == "build":
         cmd_build(args)
+    elif args.command == "install":
+        cmd_install(args)
     elif args.command == "update":
         cmd_update(args)
     elif args.command == "search":
