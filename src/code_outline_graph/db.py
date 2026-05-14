@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import threading
 import time
@@ -31,6 +32,26 @@ class Symbol:
     id: Optional[int] = None
 
 
+def _sqlite_cache_kb() -> int:
+    raw = os.environ.get("CODE_OUTLINE_SQLITE_CACHE_MB")
+    if raw:
+        try:
+            return max(1, int(raw)) * 1024
+        except ValueError:
+            pass
+    return 65536  # 64 MB default
+
+
+def _sqlite_mmap_bytes() -> int:
+    raw = os.environ.get("CODE_OUTLINE_SQLITE_MMAP_MB")
+    if raw:
+        try:
+            return max(0, int(raw)) * 1024 * 1024
+        except ValueError:
+            pass
+    return 268435456  # 256 MB default
+
+
 class Database:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -38,8 +59,8 @@ class Database:
         self._lock = threading.RLock()
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA cache_size=-65536")   # 64 MB page cache
-        self.conn.execute("PRAGMA mmap_size=268435456") # 256 MB memory-mapped I/O
+        self.conn.execute(f"PRAGMA cache_size=-{_sqlite_cache_kb()}")
+        self.conn.execute(f"PRAGMA mmap_size={_sqlite_mmap_bytes()}")
         self.conn.execute("PRAGMA temp_store=memory")
         self.conn.row_factory = sqlite3.Row
         _load_sqlite_vec(self.conn)

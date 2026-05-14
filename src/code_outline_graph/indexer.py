@@ -56,6 +56,25 @@ def _background_large_files_enabled() -> bool:
     return _env_bool("CODE_OUTLINE_BACKGROUND_LARGE_FILES", False)
 
 
+def _worker_nice_level() -> int:
+    raw = os.environ.get("CODE_OUTLINE_NICE")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return 0  # no niceness by default
+
+
+def _apply_worker_nice() -> None:
+    level = _worker_nice_level()
+    if level:
+        try:
+            os.nice(level)
+        except (AttributeError, OSError):
+            pass
+
+
 def file_metadata(file_path: str) -> tuple[int, int]:
     stat = os.stat(file_path)
     return stat.st_size, stat.st_mtime_ns
@@ -337,6 +356,7 @@ class Indexer:
         parse_results: list[tuple] = []
 
         def _parse_only(item: tuple[str, str, int, int]):
+            _apply_worker_nice()
             file_path, language, size, mtime_ns = item
             return _parse_for_index(file_path, language, size, mtime_ns)
 
@@ -369,6 +389,7 @@ class Indexer:
         if large_files and should_background_large:
 
             def _index_large_files():
+                _apply_worker_nice()
                 large_results = []
                 for item in large_files:
                     fp = item[0]

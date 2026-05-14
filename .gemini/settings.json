@@ -3,7 +3,8 @@
     "code-outline": {
       "command": "code-outline-graph",
       "args": [
-        "serve"
+        "serve",
+        "--no-watch"
       ]
     }
   },

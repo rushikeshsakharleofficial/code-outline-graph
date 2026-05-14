@@ -4,6 +4,7 @@
       "command": "code-outline-graph",
       "args": [
         "serve",
+        "--no-watch",
         "/home/rushikesh.sakharle/Projects/code-outline-graph"
       ],
       "type": "stdio"

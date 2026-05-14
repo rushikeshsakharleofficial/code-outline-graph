@@ -50,6 +50,8 @@ This project is indexed with [code-outline-graph](https://github.com/rushikeshsa
 | `get_file_header(file)` | Imports + top-level constants only |
 | `get_symbol(name)` | Exact symbol metadata |
 | `get_line_range(file, start, end)` | Read arbitrary line slice |
+| `update_project(path?)` | Reindex changed files |
+| `prune_project(path?)` | Remove stale rows for deleted or ignored files |
 
 Fall back to direct file reads only if these return empty results.
 
