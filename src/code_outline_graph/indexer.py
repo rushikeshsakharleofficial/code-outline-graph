@@ -362,6 +362,7 @@ class Indexer:
         background_large_files: bool | None = None,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
+        force: bool = False,
     ) -> dict:
         """Walk project directory and index all supported files."""
         _apply_worker_nice()  # nice main thread too for large repos
@@ -374,7 +375,7 @@ class Indexer:
         )
 
         # Preload all indexed file states in one query to avoid N per-file DB hits.
-        indexed_states: dict = self.db.load_all_indexed_file_states()
+        indexed_states: dict = self.db.load_all_indexed_file_states() if not force else {}
 
         # Phase 1: walk serially; skip callbacks stay on main thread.
         indexable: list[tuple[str, str, int, int]] = []

@@ -9,6 +9,35 @@ import time
 
 from .paths import ensure_project_db_path, resolve_project_path
 
+# ── ANSI color palette ────────────────────────────────────────────────────────
+_B   = "\033[1m"   # bold
+_DIM = "\033[2m"   # dim
+_R   = "\033[0m"   # reset
+_GRN = "\033[32m"  # green
+_YLW = "\033[33m"  # yellow
+_RED = "\033[31m"  # red
+_CYN = "\033[36m"  # cyan
+_MGT = "\033[35m"  # magenta
+_BLU = "\033[34m"  # blue
+
+def _ok(s):    return f"{_GRN}✓{_R} {s}"
+def _fail(s):  return f"{_RED}✗{_R} {s}"
+def _warn(s):  return f"{_YLW}⚠{_R}  {s}"
+def _info(s):  return f"{_CYN}→{_R} {s}"
+def _dim(s):   return f"{_DIM}{s}{_R}"
+def _bold(s):  return f"{_B}{s}{_R}"
+def _step(n, total, msg): return f"\n{_B}{_CYN}[{n}/{total}]{_R} {msg}"
+
+_KIND_CLR = {
+    "function": _CYN, "method": _CYN, "class": _MGT,
+    "module": _BLU, "interface": _MGT, "constant": _YLW,
+    "variable": _DIM, "import": _DIM,
+}
+
+def _badge(kind: str) -> str:
+    c = _KIND_CLR.get(kind, "")
+    return f"{c}[{kind}]{_R}"
+
 _SENTINEL_START = "<!-- code-outline-graph:start -->"
 _SENTINEL_END = "<!-- code-outline-graph:end -->"
 
@@ -299,15 +328,23 @@ def _show_embed_progress(indexer) -> None:
 def cmd_build(args):
     import time as _time
 
+    _BOLD = "\033[1m"
+    _GREEN = "\033[32m"
+    _YELLOW = "\033[33m"
+    _RED = "\033[31m"
+    _CYAN = "\033[36m"
+    _DIM = "\033[2m"
+    _RESET = "\033[0m"
+
     path = resolve_project_path(args.path or ".")
 
     # Header box
-    print("╔══════════════════════════════════════════════════════════╗")
-    print("║         code-outline-graph  •  Building Index            ║")
-    print("╚══════════════════════════════════════════════════════════╝")
+    print(f"{_BOLD}{_CYAN}╔══════════════════════════════════════════════════════════╗{_RESET}")
+    print(f"{_BOLD}{_CYAN}║{_RESET}         code-outline-graph  •  Building Index            {_BOLD}{_CYAN}║{_RESET}")
+    print(f"{_BOLD}{_CYAN}╚══════════════════════════════════════════════════════════╝{_RESET}")
     print()
 
-    print(f"[1/7] Indexing {path} ...")
+    print(f"\n{_BOLD}{_CYAN}[1/7]{_RESET} Indexing {_DIM}{path}{_RESET} ...")
     _db, indexer, db_path = _get_db_indexer(path)
 
     _BAR_WIDTH = 20
@@ -328,9 +365,8 @@ def cmd_build(args):
         rate = f"{current / elapsed:.0f} files/s" if elapsed > 0 and current > 0 else "--"
         # Spinner instead of percentage — no pre-scan total needed
         spinner = "▏▎▍▌▋▊▉█▉▊▋▌▍▎"[current % 14]
-        line = f"      [{spinner}] {current} files  {live_stats['symbols']} symbols  {rate}  →  {basename}"
-        line = line[:_term_width]
-        sys.stderr.write(line.ljust(_term_width) + "\r")
+        line = f"  {_GREEN}{spinner}{_RESET}  {_BOLD}{current}{_RESET} files  {_BOLD}{live_stats['symbols']}{_RESET} symbols  {_DIM}{rate}{_RESET}  →  {_DIM}{basename}{_RESET}"
+        sys.stderr.write(line[:_term_width].ljust(_term_width) + "\r")
         sys.stderr.flush()
 
     def _on_file(full_path, symbol_count, elapsed_ms, error=None):
@@ -344,12 +380,12 @@ def cmd_build(args):
             _dir_stats[rel]["symbols"] += symbol_count
         else:
             _live_stats["errors"] += 1
-            warn_msg = f"      WARN   {os.path.relpath(full_path, path):<40}  {error[:60]}"
+            warn_msg = f"  {_YELLOW}{_BOLD}WARN{_RESET}  {os.path.relpath(full_path, path):<40}  {_DIM}{error[:60]}{_RESET}"
             _print_msg(warn_msg)
         _render_bar(full_path, _live_stats)
 
     def _on_skip(full_path, reason):
-        skip_msg = f"      SKIP   {os.path.relpath(full_path, path):<40}  ({reason})"
+        skip_msg = f"  {_DIM}{_YELLOW}SKIP{_RESET}  {_DIM}{os.path.relpath(full_path, path)}{_RESET}"
         _print_msg(skip_msg)
         _render_bar("", _live_stats)
 
@@ -358,6 +394,7 @@ def cmd_build(args):
     background_large_files = getattr(args, "background_large_files", None)
     include = getattr(args, "include", None) or None
     exclude = getattr(args, "exclude", None) or None
+    force = getattr(args, "force", False)
     stats = indexer.index_project(
         path,
         on_file=_on_file,
@@ -367,12 +404,13 @@ def cmd_build(args):
         background_large_files=background_large_files,
         include=include,
         exclude=exclude,
+        force=force,
     )
 
     # Print final completed bar (Done!)
     elapsed_index = _time.time() - _start_time
     bar = "█" * _BAR_WIDTH
-    final_line = f"      [{bar}] Done!  {stats['files']} files  {stats['symbols']} symbols  {elapsed_index:.1f}s"
+    final_line = f"  {_GREEN}{_BOLD}✓ Done!{_RESET}  {_BOLD}{stats['files']}{_RESET} files  {_BOLD}{stats['symbols']}{_RESET} symbols  {_DIM}{elapsed_index:.1f}s{_RESET}"
     final_line = final_line[:_term_width]
     sys.stderr.write(final_line.ljust(_term_width) + "\n")
     sys.stderr.flush()
@@ -387,30 +425,33 @@ def cmd_build(args):
 
     # Dir summaries
     for rel_dir, ds in sorted(_dir_stats.items()):
-        print(f"      {rel_dir:<20}  →  {ds['files']:>3} files   {ds['symbols']:>5} symbols")
+        if ds["symbols"] == 0:
+            print(f"  {_DIM}  {rel_dir:<20}  →  {ds['files']:>3} files   {ds['symbols']:>5} symbols{_RESET}")
+        else:
+            print(f"    {_BOLD}{rel_dir:<20}{_RESET}  →  {ds['files']:>3} files   {_GREEN}{ds['symbols']:>5}{_RESET} symbols")
 
     print(f"      DB: {db_path}")
 
-    print("\n[2/7] Writing MCP configs (Claude/Cursor/Antigravity)...")
+    print(f"\n{_BOLD}{_CYAN}[2/7]{_RESET} Writing MCP configs (Claude/Cursor/Antigravity)...")
     _write_project_mcp_config(path)
     _write_cursor_config(path)
     _write_antigravity_config(path)
 
-    print("\n[3/7] Writing Codex CLI config + hooks...")
+    print(f"\n{_BOLD}{_CYAN}[3/7]{_RESET} Writing Codex CLI config + hooks...")
     _write_codex_config(path)
     _write_codex_hooks(path)
 
-    print("\n[4/7] Writing Gemini CLI config + hooks...")
+    print(f"\n{_BOLD}{_CYAN}[4/7]{_RESET} Writing Gemini CLI config + hooks...")
     _write_gemini_config(path)
 
-    print("\n[5/7] Writing Claude Code SessionStart + PostToolUse hooks...")
+    print(f"\n{_BOLD}{_CYAN}[5/7]{_RESET} Writing Claude Code SessionStart + PostToolUse hooks...")
     _write_claude_hooks(path)
 
-    print("\n[6/7] Writing AI instruction blocks (AGENTS.md, GEMINI.md)...")
+    print(f"\n{_BOLD}{_CYAN}[6/7]{_RESET} Writing AI instruction blocks (AGENTS.md, GEMINI.md)...")
     _upsert_instruction_block(path, "AGENTS.md")
     _upsert_instruction_block(path, "GEMINI.md")
 
-    print("\n[7/7] Installing Claude Code skill...")
+    print(f"\n{_BOLD}{_CYAN}[7/7]{_RESET} Installing Claude Code skill...")
     cmd_install_skill(None)
 
     if stats.get("embeddings") == "enabled":
@@ -421,16 +462,16 @@ def cmd_build(args):
 
     # Footer box
     _total_elapsed = _time.time() - _start_time
-    print()
-    print("══════════════════════════════════════════════════════════")
-    print(f"  Build complete in {_total_elapsed:.1f}s")
-    print(f"  {stats['files']} files  •  {stats['symbols']} symbols  •  {stats['skipped']} skipped  •  {stats.get('errors', 0)} errors")
-    print("══════════════════════════════════════════════════════════")
+    print(f"\n{_GREEN}══════════════════════════════════════════════════════════{_RESET}")
+    print(f"  {_BOLD}Build complete{_RESET} in {_total_elapsed:.1f}s")
+    print(f"  {_BOLD}{stats['files']}{_RESET} files  •  {_BOLD}{stats['symbols']}{_RESET} symbols  •  {stats['skipped']} skipped  •  {_RED if stats.get('errors', 0) > 0 else ''}{stats.get('errors', 0)} errors{_RESET}")
+    print(f"{_GREEN}══════════════════════════════════════════════════════════{_RESET}")
 
 
 def cmd_update(args):
+    t0 = time.time()
     path = resolve_project_path(args.path or ".")
-    print(f"Updating index for {path}...")
+    print(f"\n{_bold('Updating')}  {_dim(path)}")
     _db, indexer, _db_path = _get_db_indexer(path)
     from .indexer import iter_indexable_files
 
@@ -439,10 +480,17 @@ def cmd_update(args):
     checked = 0
     errors = 0
     current_files: set[str] = set()
+    _spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
     def _on_skip(_full_path: str, _reason: str) -> None:
         nonlocal skipped
         skipped += 1
+
+    def _render_spinner() -> None:
+        frame = _spinner[checked % len(_spinner)]
+        line = f"\r  {_CYN}{frame}{_R}  {_B}{checked}{_R} checked  {_B}{updated}{_R} updated"
+        sys.stdout.write(line.ljust(60))
+        sys.stdout.flush()
 
     include = getattr(args, "include", None) or None
     exclude = getattr(args, "exclude", None) or None
@@ -456,20 +504,22 @@ def cmd_update(args):
             updated += 1
         except Exception as e:
             errors += 1
-            print(f"Warning: failed to update {full}: {e}", file=sys.stderr)
+            sys.stdout.write("\r" + " " * 60 + "\r")
+            print(_warn(f"failed to update {full}: {e}"), file=sys.stderr)
         checked += 1
-        if checked % 50 == 0:
-            print(f"  checked {checked} files, {updated} updated...", end="\r", flush=True)
-    if checked >= 50:
-        print(" " * 60, end="\r")  # clear progress line
+        if checked % 10 == 0:
+            _render_spinner()
+    sys.stdout.write("\r" + " " * 60 + "\r")
+    sys.stdout.flush()
     pruned = indexer.prune_missing_files(current_files)
-    print(f"Updated {updated} files, {skipped} unchanged, {pruned} pruned, {errors} errors")
+    elapsed = time.time() - t0
+    print(_ok(f"Updated {updated}  unchanged {skipped}  pruned {pruned}  errors {errors}  {elapsed:.1f}s"))
     if updated > 0 and getattr(args, "embeddings", False):
-        print("Updating embeddings...", end=" ", flush=True)
+        print(_info("Updating embeddings..."))
         indexer._batch_embed_all()
-        print("done")
+        print(_ok("Embeddings updated"))
     elif updated > 0:
-        print("Embeddings disabled (use --embeddings to update semantic vectors)")
+        print(_dim("Embeddings disabled (use --embeddings to update semantic vectors)"))
 
 
 def cmd_search(args):
@@ -483,17 +533,26 @@ def cmd_search(args):
     if args.file:
         file_filter = os.path.abspath(os.path.join(resolve_project_path(args.project), args.file))
         results = [r for r in results if r["file_path"] == file_filter or args.file in r["file_path"]]
-    if not results:
-        print("No results.")
-        return
     if args.json:
         print(json.dumps(results, indent=2))
         return
+    if not results:
+        print(f"  {_dim('no results for')} {_CYN}{args.query}{_R}")
+        return
+    print(f"\n{_bold('Search')} {_CYN}{args.query}{_R}  {_dim(str(len(results)) + ' results')}")
+    print()
     for r in results:
-        parent = f"  (in {r['parent_name']})" if r.get("parent_name") else ""
-        print(f"{r['file_path']}:{r['start_line']}-{r['end_line']}  [{r['kind']}] {r['name']}{parent}")
+        try:
+            rel = os.path.relpath(r["file_path"])
+        except ValueError:
+            rel = r["file_path"]
+        loc = f"{rel}:{r['start_line']}-{r['end_line']}"
+        print(f"  {_badge(r['kind'])}  {_bold(r['name'])}  {_dim(loc)}")
+        if r.get("parent_name"):
+            print(f"              {_dim('in ' + r['parent_name'])}")
         if r.get("signature"):
-            print(f"  {r['signature']}")
+            print(f"              {_CYN}{r['signature']}{_R}")
+        print()
 
 
 def cmd_outline(args):
@@ -506,20 +565,34 @@ def cmd_outline(args):
     indexer.ensure_fresh(file_path)
     symbols = db.get_symbols_by_file(file_path)
     if not symbols:
-        print("No symbols found (file not indexed or no supported symbols).")
+        print(f"  {_dim('no symbols found (file not indexed or no supported symbols)')}")
         return
+
+    basename = os.path.basename(file_path)
+    print(f"\n  {_bold(basename)}  {_dim(file_path)}")
+
     # Show imports and module-level variables first, then the rest
     header_kinds = ("import", "variable")
     header = [s for s in symbols if s.kind in header_kinds]
     body = [s for s in symbols if s.kind not in header_kinds]
+
+    def _fmt_symbol(s, indent: str = "") -> str:
+        label = s.signature or s.name
+        line_range = f":{s.start_line}-{s.end_line}"
+        return f"  {indent}{_badge(s.kind)}  {_bold(label)}  {_dim(line_range)}"
+
     if header:
-        print("--- imports / module-level ---")
-        for s in header:
-            print(f"{s.start_line}-{s.end_line}  [{s.kind}] {s.signature or s.name}")
         print()
-    for s in body:
-        indent = "  " if s.parent_name else ""
-        print(f"{indent}{s.start_line}-{s.end_line}  [{s.kind}] {s.signature or s.name}")
+        print(f"  {_DIM}── imports / module-level {'─' * 30}{_R}")
+        for s in header:
+            print(_fmt_symbol(s))
+
+    if body:
+        print()
+        print(f"  {_DIM}── symbols {'─' * 30}{_R}")
+        for s in body:
+            indent = "  " if s.parent_name else ""
+            print(_fmt_symbol(s, indent=indent))
 
 
 def cmd_status(args):
@@ -541,13 +614,27 @@ def cmd_status(args):
         LIMIT 8
         """
     ).fetchall()
-    print(f"Index: {files} files, {symbols} symbols")
-    print(f"Embeddings: {embeddings}")
-    print(f"Missing indexed files: {stale}")
+    W = 50
+    div = f"  {_DIM}{'─' * W}{_R}"
+
+    print(f"\n  {_bold('Index Status')}  {_dim(path)}")
+    print(div)
+    print(f"  {'Files':<10}  {_GRN}{_B}{files:>10,}{_R}  indexed")
+    print(f"  {'Symbols':<10}  {_GRN}{_B}{symbols:>10,}{_R}  extracted")
+    vec_note = 'embeddings ready' if embeddings > 0 else _dim('disabled — use --embeddings')
+    print(f"  {'Vectors':<10}  {_B}{embeddings:>10,}{_R}  {vec_note}")
+    stale_color = _RED if stale > 0 else _GRN
+    stale_note = _YLW + 'run prune' + _R if stale > 0 else ''
+    print(f"  {'Stale':<10}  {stale_color}{_B}{stale:>10,}{_R}  {stale_note}")
+    print(div)
     if languages:
-        print("Languages: " + ", ".join(f"{r['language']}={r['files']}" for r in languages))
-    print(f"Project: {path}")
-    print(f"DB: {db_path}")
+        max_files = max((r['files'] for r in languages), default=1)
+        for r in languages:
+            bar_w = int(20 * r['files'] / max_files)
+            bar = _GRN + '█' * bar_w + _DIM + '░' * (20 - bar_w) + _R
+            print(f"  {r['language']:<14} {bar}  {r['files']:,}")
+        print(div)
+    print(f"  DB  {_dim(db_path)}")
 
 
 def cmd_prune(args):
@@ -561,71 +648,103 @@ def cmd_prune(args):
 
     current_files = _current_indexable_files(path, on_skip=_on_skip)
     removed = indexer.prune_missing_files(current_files)
-    print(f"Pruned {removed} files ({skipped} ignored/secret files skipped).")
+    if removed > 0:
+        print(f"{_ok(f'Pruned {removed} stale entries')}  {_dim(str(skipped) + ' files kept')}")
+    else:
+        print(f"{_ok('Index clean')}  {_dim('nothing to prune')}")
 
 
 def cmd_doctor(args):
     path = resolve_project_path(args.path or ".")
     db = None
     ok = True
-    print(f"Project: {path}")
-    print(f"Exists: {'yes' if os.path.isdir(path) else 'no'}")
     db_path = ensure_project_db_path(path)
-    print(f"DB: {db_path}")
+
+    print(f"\n  {_bold('Doctor')}  {_dim(path)}\n")
+
+    if os.path.isdir(path):
+        print(f"  {_ok('Project exists')}")
+    else:
+        ok = False
+        print(f"  {_fail('Project directory not found')}")
+
     try:
         from .db import Database
         db = Database(db_path)
-        print("SQLite/sqlite-vec: ok")
+        print(f"  {_ok('SQLite / sqlite-vec')}")
     except Exception as e:
         ok = False
-        print(f"SQLite/sqlite-vec: failed ({e})")
+        print(f"  {_fail(f'SQLite: {e}')}")
+
     try:
         from .parser import SymbolParser
         SymbolParser()._get_parser("python")
-        print("tree-sitter python parser: ok")
+        print(f"  {_ok('tree-sitter (python)')}")
     except Exception as e:
         ok = False
-        print(f"tree-sitter python parser: failed ({e})")
+        print(f"  {_fail(f'tree-sitter parser: {e}')}")
+
     try:
         __import__("fastembed")
-        print("embeddings: ok")
-    except Exception as e:
-        print(f"embeddings: unavailable ({e})")
+        print(f"  {_ok('fastembed (embeddings ready)')}")
+    except Exception:
+        print(f"  {_warn('fastembed not installed — embeddings disabled')}")
+
+    print()
+    print(f"  {_DIM}MCP configs{_R}")
+    _missing_note = _dim("missing — run install")
     for rel in [".mcp.json", ".cursor/mcp.json", ".codex/config.toml", ".claude/settings.json", ".gemini/settings.json"]:
         config_path = os.path.join(path, rel)
-        print(f"{rel}: {'found' if os.path.exists(config_path) else 'missing'}")
+        if os.path.exists(config_path):
+            print(f"  {_ok(rel)}")
+        else:
+            print(f"  {_warn(f'{rel}  {_missing_note}')}")
+
+    print()
     if db is not None:
+        files_row = db.conn.execute("SELECT COUNT(*) FROM indexed_files").fetchone()
+        files = files_row[0] if files_row else 0
         stale = sum(1 for file_path in db.list_indexed_files() if not os.path.exists(file_path))
-        print(f"Missing indexed files: {stale}")
+        print(f"  {_ok(f'Index  {files:,} files  {stale} stale')}")
         db.close()
+
     if not ok:
         sys.exit(1)
 
 
 def cmd_install(args):
     path = resolve_project_path(args.path or ".")
-    print(f"Installing MCP configs for {path} ...")
+    print(f"\n{_B}{_CYN}Installing MCP configs{_R}  {_dim(path)}")
 
-    print("\n[1/5] Writing MCP configs (Claude/Cursor/Antigravity)...")
+    print(_step(1, 5, "Writing MCP configs (Claude/Cursor/Antigravity)..."))
     _write_project_mcp_config(path)
+    print(f"  {_ok('.mcp.json')}")
     _write_cursor_config(path)
+    print(f"  {_ok('.cursor/mcp.json')}")
     _write_antigravity_config(path)
+    print(f"  {_ok('Antigravity mcp_config.json')}")
 
-    print("\n[2/5] Writing Codex CLI config + hooks...")
+    print(_step(2, 5, "Writing Codex CLI config + hooks..."))
     _write_codex_config(path)
+    print(f"  {_ok('.codex/config.toml')}")
     _write_codex_hooks(path)
+    print(f"  {_ok('.codex/hooks.json')}")
 
-    print("\n[3/5] Writing Gemini CLI config + hooks...")
+    print(_step(3, 5, "Writing Gemini CLI config + hooks..."))
     _write_gemini_config(path)
+    print(f"  {_ok('.gemini/settings.json')}")
 
-    print("\n[4/5] Writing Claude Code SessionStart + PostToolUse hooks...")
+    print(_step(4, 5, "Writing Claude Code SessionStart + PostToolUse hooks..."))
     _write_claude_hooks(path)
+    print(f"  {_ok('.claude/settings.json')}")
 
-    print("\n[5/5] Writing AI instruction blocks (AGENTS.md, GEMINI.md)...")
+    print(_step(5, 5, "Writing AI instruction blocks (AGENTS.md, GEMINI.md)..."))
     _upsert_instruction_block(path, "AGENTS.md")
+    print(f"  {_ok('AGENTS.md')}")
     _upsert_instruction_block(path, "GEMINI.md")
+    print(f"  {_ok('GEMINI.md')}")
 
-    print("\nInstall complete. Run 'code-outline-graph build .' to index symbols.")
+    print(f"\n{_ok('Install complete')}  {_dim('run build . to index symbols')}")
 
 
 def cmd_export(args):
@@ -664,10 +783,15 @@ def cmd_callers(args):
         print(json.dumps(results, indent=2))
         return
     if not results:
-        print(f"No callers found for '{args.name}'")
+        print(f"  {_dim('no callers found for')} {_CYN}{args.name}{_R}")
         return
+    print(f"\n{_bold('Callers of')} {_CYN}{args.name}{_R}  {_dim(str(len(results)) + ' found')}")
     for r in results:
-        print(f"{r['file_path']}:{r['call_line']}  [{r['kind']}] {r['name']}")
+        try:
+            rel_path = os.path.relpath(r["file_path"])
+        except ValueError:
+            rel_path = r["file_path"]
+        print(f"  {_badge(r['kind'])} {_bold(r['name'])}  {_dim(rel_path + ':' + str(r['call_line']))}")
 
 
 def cmd_callees(args):
@@ -677,17 +801,19 @@ def cmd_callees(args):
         print(json.dumps(results, indent=2))
         return
     if not results:
-        print(f"No callees found for '{args.name}'")
+        print(f"  {_dim('no callees found for')} {_CYN}{args.name}{_R}")
         return
+    print(f"\n{_bold('Calls from')} {_CYN}{args.name}{_R}  {_dim(str(len(results)) + ' found')}")
     for r in results:
-        print(f"line {r['call_line']}: calls '{r['callee_name']}'")
+        print(f"  {_CYN}→{_R} {_bold(r['callee_name'])}  {_dim('line ' + str(r['call_line']))}")
 
 
 def cmd_install_skill(_args):
     import shutil
+    print(f"\n{_bold('Installing skill')} ...")
     skill_src_dir = os.path.join(os.path.dirname(__file__), "skill")
     if not os.path.isdir(skill_src_dir):
-        print("Error: bundled skill directory not found in package.", file=sys.stderr)
+        print(_fail("bundled skill directory not found in package."), file=sys.stderr)
         sys.exit(1)
     skill_dest_dir = os.path.expanduser("~/.claude/skills/code-outline-graph")
     os.makedirs(skill_dest_dir, exist_ok=True)
@@ -695,8 +821,8 @@ def cmd_install_skill(_args):
         src = os.path.join(skill_src_dir, fname)
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(skill_dest_dir, fname))
-            print(f"Installed: {fname} → {skill_dest_dir}/  ✓")
-    print(f"Skill installed to {skill_dest_dir}")
+            print(f"  {_ok(fname)}")
+    print(f"\n{_ok(f'Skill ready → {skill_dest_dir}')}")
 
 
 def cmd_serve(_args):
@@ -755,6 +881,7 @@ def main():
         help="Only index files matching glob, e.g. 'src/**/*.py' (repeatable)")
     p_build.add_argument("--exclude", action="append", metavar="GLOB",
         help="Skip files matching glob, e.g. 'tests/*' (repeatable)")
+    p_build.add_argument("--force", action="store_true", help="Reindex all files, ignoring cached state")
 
     p_update = sub.add_parser("update", help="Reindex changed files only")
     p_update.add_argument("path", nargs="?", default=".", help="Project path (default: cwd)")
