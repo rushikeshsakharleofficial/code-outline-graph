@@ -5,8 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from tree_sitter import Parser as _TSParser
-from tree_sitter_language_pack import get_language
+from tree_sitter_language_pack import get_parser as _lp_get_parser
 
 from .db import Symbol
 
@@ -116,10 +115,7 @@ class SymbolParser:
     def _get_parser(self, language: str):
         if language not in self._parsers:
             try:
-                # Create a fresh Parser per instance — avoids the global cache in
-                # tree_sitter_language_pack.get_parser which returns singletons that
-                # raise RuntimeError when dropped from a thread that didn't create them.
-                self._parsers[language] = _TSParser(get_language(language))
+                self._parsers[language] = _lp_get_parser(language)
             except Exception:
                 self._parsers[language] = None  # unavailable — skip silently
         return self._parsers[language]
