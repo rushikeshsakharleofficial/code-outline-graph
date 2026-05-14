@@ -78,6 +78,10 @@ async def list_tools():
             inputSchema={"type":"object","properties":{"path":{"type":"string"}},"required":[]}),
         types.Tool(name="prune_project", description="Remove stale index rows for deleted or ignored files",
             inputSchema={"type":"object","properties":{"path":{"type":"string"}},"required":[]}),
+        types.Tool(name="find_callers", description="Find all symbols that call the named function",
+            inputSchema={"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
+        types.Tool(name="find_callees", description="Find all functions called by the named symbol",
+            inputSchema={"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
     ]
 
 
@@ -205,6 +209,14 @@ async def call_tool(name: str, arguments: dict):
         }
         pruned = indexer.prune_missing_files(current_files)
         return [types.TextContent(type="text", text=json.dumps({"pruned": pruned}))]
+
+    elif name == "find_callers":
+        results = db.get_callers(arguments["name"])
+        return [types.TextContent(type="text", text=json.dumps(results))]
+
+    elif name == "find_callees":
+        results = db.get_callees(arguments["name"])
+        return [types.TextContent(type="text", text=json.dumps(results))]
 
     return [types.TextContent(type="text", text=json.dumps({"error":"unknown_tool","tool":name}))]
 

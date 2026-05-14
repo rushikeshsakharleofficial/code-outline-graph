@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import fnmatch
 import hashlib
 import os
 import threading
@@ -81,18 +82,29 @@ def file_metadata(file_path: str) -> tuple[int, int]:
 
 
 def _gitignore_matcher(project_path: str):
+    matchers = []
     try:
         import gitignore_parser
-
-        gitignore_path = os.path.join(project_path, ".gitignore")
-        if os.path.exists(gitignore_path):
-            return gitignore_parser.parse_gitignore(gitignore_path)
+        for fname in (".gitignore", ".cogignore"):
+            ignore_path = os.path.join(project_path, fname)
+            if os.path.exists(ignore_path):
+                matchers.append(gitignore_parser.parse_gitignore(ignore_path))
     except ImportError:
         pass
-    return lambda _p: False
+    if not matchers:
+        return lambda _p: False
+    if len(matchers) == 1:
+        return matchers[0]
+    return lambda p: any(m(p) for m in matchers)
 
 
-def iter_indexable_files(project_path: str, on_skip=None):
+def iter_indexable_files(
+    project_path: str,
+    on_skip=None,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+):
     """Yield supported, non-ignored files with cached stat metadata."""
     matches = _gitignore_matcher(project_path)
     # Cache ignored directory paths so children are pruned without re-checking.
@@ -130,6 +142,16 @@ def iter_indexable_files(project_path: str, on_skip=None):
                 if on_skip is not None:
                     on_skip(full, "gitignored")
                 continue
+            if include or exclude:
+                rel = os.path.relpath(full, project_path)
+                if include and not any(fnmatch.fnmatch(rel, p) for p in include):
+                    if on_skip is not None:
+                        on_skip(full, "not in --include")
+                    continue
+                if exclude and any(fnmatch.fnmatch(rel, p) for p in exclude):
+                    if on_skip is not None:
+                        on_skip(full, "--exclude match")
+                    continue
             try:
                 size, mtime_ns = file_metadata(full)
             except OSError:
@@ -151,14 +173,15 @@ def _parse_for_index(
     if lang != "sqlite":
         source = open(file_path, "rb").read()
         checksum = hashlib.blake2b(source, digest_size=16).hexdigest()
-        symbols = _get_thread_parser().parse_file(file_path, source=source)
+        symbols, calls = _get_thread_parser().parse_file_with_calls(file_path, source=source)
     else:
         checksum = compute_checksum(file_path)
         symbols = _get_thread_parser().parse_file(file_path)
+        calls = []
     for symbol in symbols:
         symbol.checksum = checksum
     elapsed_ms = (time.time() - t0) * 1000
-    return symbols, checksum, lang, file_size, mtime_ns, elapsed_ms
+    return symbols, calls, checksum, lang, file_size, mtime_ns, elapsed_ms
 
 
 class Indexer:
@@ -205,10 +228,11 @@ class Indexer:
         if os.path.abspath(file_path) == os.path.abspath(self.db.path):
             return 0
 
-        symbols, checksum, lang, file_size, mtime_ns, _elapsed_ms = _parse_for_index(
+        symbols, calls, checksum, lang, file_size, mtime_ns, _elapsed_ms = _parse_for_index(
             file_path, language, file_size, mtime_ns
         )
         self.db.insert_symbols(symbols, file_path, checksum, lang, file_size, mtime_ns)
+        self.db.insert_calls_for_file(file_path, calls)
         should_embed = self.enable_embeddings if embed is None else embed
         if should_embed:
             self._update_embeddings_for_file(file_path)
@@ -336,6 +360,8 @@ class Indexer:
         embed: bool | None = None,
         max_workers: int | None = None,
         background_large_files: bool | None = None,
+        include: list[str] | None = None,
+        exclude: list[str] | None = None,
     ) -> dict:
         """Walk project directory and index all supported files."""
         _apply_worker_nice()  # nice main thread too for large repos
@@ -360,7 +386,7 @@ class Indexer:
             if on_skip is not None:
                 on_skip(full_path, reason)
 
-        for item in iter_indexable_files(project_path, on_skip=_on_skip):
+        for item in iter_indexable_files(project_path, on_skip=_on_skip, include=include, exclude=exclude):
             _full, _language, size, _mtime_ns = item
             current_files.add(_full)
             stored = indexed_states.get(_full)
@@ -390,8 +416,8 @@ class Indexer:
             for fut in concurrent.futures.as_completed(future_map):
                 full = future_map[fut][0]
                 try:
-                    symbols, checksum, lang, size, mtime_ns, elapsed_ms = fut.result()
-                    parse_results.append((symbols, full, checksum, lang, size, mtime_ns))
+                    symbols, calls, checksum, lang, size, mtime_ns, elapsed_ms = fut.result()
+                    parse_results.append((symbols, calls, full, checksum, lang, size, mtime_ns))
                     stats["files"] += 1
                     stats["symbols"] += len(symbols)
                     if on_file is not None:
@@ -406,6 +432,9 @@ class Indexer:
         # Phase 3: bulk-write normal files; one FTS rebuild at the end.
         if parse_results:
             self.db.bulk_insert_all(parse_results)
+            for symbols, calls, full, checksum, lang, size, mtime_ns in parse_results:
+                if calls:
+                    self.db.insert_calls_for_file(full, calls)
 
         # Phase 4: large files are skipped by default to avoid surprise load on
         # large repos. Opt in with CODE_OUTLINE_BACKGROUND_LARGE_FILES=1.
@@ -419,12 +448,15 @@ class Indexer:
                 for item in large_files:
                     fp = item[0]
                     try:
-                        symbols, checksum, lang, size, mtime_ns, _ = _parse_only(item)
-                        large_results.append((symbols, fp, checksum, lang, size, mtime_ns))
+                        symbols, calls, checksum, lang, size, mtime_ns, _ = _parse_only(item)
+                        large_results.append((symbols, calls, fp, checksum, lang, size, mtime_ns))
                     except Exception:
                         pass
                 if large_results:
                     self.db.bulk_insert_all(large_results, rebuild_fts=False)
+                    for symbols, calls, fp, checksum, lang, size, mtime_ns in large_results:
+                        if calls:
+                            self.db.insert_calls_for_file(fp, calls)
 
             if self._large_file_thread and self._large_file_thread.is_alive():
                 self._large_file_thread.join(timeout=1)

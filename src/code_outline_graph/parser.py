@@ -144,6 +144,23 @@ class SymbolParser:
         return extractor.extract(tree.root_node)
 
 
+    def parse_file_with_calls(self, file_path: str, source: bytes | None = None):
+        """Return (symbols, calls). calls = [(caller_symbol, callee_name, call_line)]."""
+        language = detect_language(file_path)
+        if language is None or language == "sqlite":
+            return self.parse_file(file_path, source), []
+        if source is None:
+            source = Path(file_path).read_bytes()
+        parser = self._get_parser(language)
+        if parser is None:
+            return [], []
+        tree = parser.parse(source)
+        extractor = SymbolExtractor(source=source, language=language, file_path=file_path)
+        symbols = extractor.extract(tree.root_node)
+        calls = extractor.extract_calls(tree.root_node, symbols)
+        return symbols, calls
+
+
 def _parse_sqlite_schema(file_path: str) -> list[Symbol]:
     """Extract tables and views from a SQLite database as symbols."""
     import sqlite3 as _sqlite3
@@ -202,6 +219,78 @@ class SymbolExtractor:
             # Not a symbol node — recurse with current parent context unchanged
             for child in node.children:
                 self._walk(child, symbols, parent_name=parent_name, parent_id=parent_id)
+
+    _CALL_NODE_TYPES: dict[str, str] = {
+        "python": "call",
+        "javascript": "call_expression",
+        "typescript": "call_expression",
+        "tsx": "call_expression",
+        "go": "call_expression",
+        "rust": "call_expression",
+        "java": "method_invocation",
+        "c": "call_expression",
+        "cpp": "call_expression",
+    }
+
+    def extract_calls(self, root_node, symbols: list) -> list:
+        """Return list of (caller_symbol, callee_name, call_line) for supported languages."""
+        call_node_type = self._CALL_NODE_TYPES.get(self.language)
+        if call_node_type is None:
+            return []
+        fn_symbols = [(s, s.start_line, s.end_line) for s in symbols
+                      if s.kind in ("function", "method")]
+        results: list = []
+        self._collect_calls(root_node, call_node_type, fn_symbols, results)
+        return results
+
+    def _collect_calls(self, node, call_node_type: str, fn_symbols, results: list) -> None:
+        if node.type == call_node_type:
+            callee = self._get_callee_name(node)
+            if callee:
+                call_line = node.start_point[0] + 1
+                caller = self._find_enclosing_symbol(call_line, fn_symbols)
+                if caller is not None:
+                    results.append((caller, callee, call_line))
+        for child in node.children:
+            self._collect_calls(child, call_node_type, fn_symbols, results)
+
+    def _get_callee_name(self, node) -> Optional[str]:
+        lang = self.language
+        if lang == "python":
+            fn_node = node.child_by_field_name("function")
+            if fn_node is None:
+                return None
+            if fn_node.type == "identifier":
+                return fn_node.text.decode("utf-8", errors="replace")
+            if fn_node.type == "attribute":
+                attr = fn_node.child_by_field_name("attribute")
+                if attr:
+                    return attr.text.decode("utf-8", errors="replace")
+        elif lang in ("javascript", "typescript", "tsx", "go", "rust", "c", "cpp"):
+            fn_node = node.child_by_field_name("function")
+            if fn_node is None:
+                return None
+            if fn_node.type == "identifier":
+                return fn_node.text.decode("utf-8", errors="replace")
+            for child in reversed(fn_node.children):
+                if child.type in ("identifier", "field_identifier", "property_identifier"):
+                    return child.text.decode("utf-8", errors="replace")
+        elif lang == "java":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                return name_node.text.decode("utf-8", errors="replace")
+        return None
+
+    def _find_enclosing_symbol(self, call_line: int, fn_symbols) -> Optional[object]:
+        best = None
+        best_size = float("inf")
+        for sym, start, end in fn_symbols:
+            if start <= call_line <= end:
+                size = end - start
+                if size < best_size:
+                    best = sym
+                    best_size = size
+        return best
 
     def _extract_node(self, node, parent_name: Optional[str], parent_id: Optional[int]) -> Optional[Symbol]:
         kind = self._node_kind(node)

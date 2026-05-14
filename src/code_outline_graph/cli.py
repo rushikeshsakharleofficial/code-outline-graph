@@ -356,6 +356,8 @@ def cmd_build(args):
     enable_embeddings = getattr(args, "embeddings", None)
     workers = getattr(args, "workers", None)
     background_large_files = getattr(args, "background_large_files", None)
+    include = getattr(args, "include", None) or None
+    exclude = getattr(args, "exclude", None) or None
     stats = indexer.index_project(
         path,
         on_file=_on_file,
@@ -363,6 +365,8 @@ def cmd_build(args):
         embed=enable_embeddings,
         max_workers=workers,
         background_large_files=background_large_files,
+        include=include,
+        exclude=exclude,
     )
 
     # Print final completed bar (Done!)
@@ -440,7 +444,9 @@ def cmd_update(args):
         nonlocal skipped
         skipped += 1
 
-    for full, language, size, mtime_ns in iter_indexable_files(path, on_skip=_on_skip):
+    include = getattr(args, "include", None) or None
+    exclude = getattr(args, "exclude", None) or None
+    for full, language, size, mtime_ns in iter_indexable_files(path, on_skip=_on_skip, include=include, exclude=exclude):
         current_files.add(full)
         try:
             if indexer.is_file_current(full, size, mtime_ns):
@@ -622,6 +628,61 @@ def cmd_install(args):
     print("\nInstall complete. Run 'code-outline-graph build .' to index symbols.")
 
 
+def cmd_export(args):
+    import csv
+    import io
+    path = resolve_project_path(getattr(args, "path", None) or ".")
+    db, _indexer, _db_path = _get_db_indexer(path)
+    rows = db.conn.execute(
+        "SELECT id, name, kind, file_path, start_line, end_line, "
+        "signature, docstring, parent_name, language FROM symbols ORDER BY file_path, start_line"
+    ).fetchall()
+    data = [dict(r) for r in rows]
+    fmt = (args.format or "json").lower()
+    if fmt == "json":
+        text = json.dumps(data, indent=2)
+    else:
+        buf = io.StringIO()
+        if data:
+            writer = csv.DictWriter(buf, fieldnames=list(data[0].keys()))
+            writer.writeheader()
+            writer.writerows(data)
+        text = buf.getvalue()
+    output = getattr(args, "output", "-") or "-"
+    if output != "-":
+        with open(output, "w") as f:
+            f.write(text)
+        print(f"Exported {len(data)} symbols to {output}")
+    else:
+        print(text)
+
+
+def cmd_callers(args):
+    db, _indexer, _db_path = _get_db_indexer(getattr(args, "project", "."))
+    results = db.get_callers(args.name)
+    if getattr(args, "json", False):
+        print(json.dumps(results, indent=2))
+        return
+    if not results:
+        print(f"No callers found for '{args.name}'")
+        return
+    for r in results:
+        print(f"{r['file_path']}:{r['call_line']}  [{r['kind']}] {r['name']}")
+
+
+def cmd_callees(args):
+    db, _indexer, _db_path = _get_db_indexer(getattr(args, "project", "."))
+    results = db.get_callees(args.name)
+    if getattr(args, "json", False):
+        print(json.dumps(results, indent=2))
+        return
+    if not results:
+        print(f"No callees found for '{args.name}'")
+        return
+    for r in results:
+        print(f"line {r['call_line']}: calls '{r['callee_name']}'")
+
+
 def cmd_install_skill(_args):
     import shutil
     skill_src_dir = os.path.join(os.path.dirname(__file__), "skill")
@@ -690,6 +751,10 @@ def main():
         default=None,
         help="Index files >=512KB in the background (default: skip)",
     )
+    p_build.add_argument("--include", action="append", metavar="GLOB",
+        help="Only index files matching glob, e.g. 'src/**/*.py' (repeatable)")
+    p_build.add_argument("--exclude", action="append", metavar="GLOB",
+        help="Skip files matching glob, e.g. 'tests/*' (repeatable)")
 
     p_update = sub.add_parser("update", help="Reindex changed files only")
     p_update.add_argument("path", nargs="?", default=".", help="Project path (default: cwd)")
@@ -698,6 +763,10 @@ def main():
         action="store_true",
         help="Update semantic vector embeddings after changed files",
     )
+    p_update.add_argument("--include", action="append", metavar="GLOB",
+        help="Only reindex files matching glob (repeatable)")
+    p_update.add_argument("--exclude", action="append", metavar="GLOB",
+        help="Skip files matching glob (repeatable)")
 
     p_search = sub.add_parser("search", help="Search symbols by keyword")
     p_search.add_argument("--project", default=".", help="Project path (default: cwd)")
@@ -739,6 +808,23 @@ def main():
     p_install = sub.add_parser("install", help="Write MCP configs and hooks for a project (no reindex)")
     p_install.add_argument("path", nargs="?", default=".", help="Project path (default: cwd)")
 
+    p_export = sub.add_parser("export", help="Export all indexed symbols to JSON or CSV")
+    p_export.add_argument("path", nargs="?", default=".", help="Project path (default: cwd)")
+    p_export.add_argument("--format", choices=["json", "csv"], default="json",
+        help="Output format (default: json)")
+    p_export.add_argument("--output", "-o", default="-",
+        help="Output file path (default: stdout)")
+
+    p_callers = sub.add_parser("callers", help="List all symbols that call the named function")
+    p_callers.add_argument("name", help="Symbol name to find callers of")
+    p_callers.add_argument("--project", default=".", help="Project path (default: cwd)")
+    p_callers.add_argument("--json", action="store_true", help="Emit JSON")
+
+    p_callees = sub.add_parser("callees", help="List all functions called by the named symbol")
+    p_callees.add_argument("name", help="Symbol name to find callees of")
+    p_callees.add_argument("--project", default=".", help="Project path (default: cwd)")
+    p_callees.add_argument("--json", action="store_true", help="Emit JSON")
+
     sub.add_parser("install-skill", help="Install Claude Code skill to ~/.claude/skills/")
 
     args = parser.parse_args()
@@ -761,6 +847,12 @@ def main():
         cmd_doctor(args)
     elif args.command == "serve" or args.command is None:
         cmd_serve(args)
+    elif args.command == "export":
+        cmd_export(args)
+    elif args.command == "callers":
+        cmd_callers(args)
+    elif args.command == "callees":
+        cmd_callees(args)
     elif args.command == "install-skill":
         cmd_install_skill(args)
     else:

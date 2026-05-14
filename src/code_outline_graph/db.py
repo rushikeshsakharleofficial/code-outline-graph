@@ -129,7 +129,24 @@ class Database:
             END;
         """)
         self._ensure_indexed_files_columns()
+        self._ensure_call_graph_table()
         self.conn.commit()
+
+    def _ensure_call_graph_table(self) -> None:
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS symbol_calls (
+                id          INTEGER PRIMARY KEY,
+                caller_id   INTEGER NOT NULL,
+                callee_name TEXT NOT NULL,
+                call_line   INTEGER NOT NULL
+            )
+        """)
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_calls_caller ON symbol_calls(caller_id)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_calls_callee ON symbol_calls(callee_name)"
+        )
 
     def _ensure_indexed_files_columns(self) -> None:
         columns = {
@@ -224,7 +241,7 @@ class Database:
                     with self.conn:
                         for result in chunk:
                             symbols, file_path, checksum, language, file_size, mtime_ns = (
-                                self._unpack_file_result(result)
+                                self._unpack_file_result_symbols(result)
                             )
                             self._replace_file_symbols(
                                 symbols, file_path, checksum, language, now, file_size, mtime_ns
@@ -238,11 +255,64 @@ class Database:
                     self.conn.commit()
 
     @staticmethod
-    def _unpack_file_result(result: tuple) -> tuple:
+    def _unpack_file_result_symbols(result: tuple) -> tuple:
+        """Extract (symbols, file_path, checksum, language, file_size, mtime_ns), ignoring calls."""
+        if len(result) == 7:
+            # new format: (symbols, calls, file_path, checksum, language, file_size, mtime_ns)
+            symbols, _calls, file_path, checksum, language, file_size, mtime_ns = result
+            return symbols, file_path, checksum, language, file_size, mtime_ns
         if len(result) == 4:
             symbols, file_path, checksum, language = result
             return symbols, file_path, checksum, language, None, None
+        # old 6-tuple: (symbols, file_path, checksum, language, file_size, mtime_ns)
         return result
+
+    def insert_calls_for_file(self, file_path: str, calls: list) -> None:
+        """Insert call graph edges for one file. calls = [(caller_symbol, callee_name, call_line)]."""
+        if not calls:
+            return
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    "DELETE FROM symbol_calls WHERE caller_id IN "
+                    "(SELECT id FROM symbols WHERE file_path=?)",
+                    (file_path,),
+                )
+                rows = []
+                for caller_sym, callee_name, call_line in calls:
+                    row = self.conn.execute(
+                        "SELECT id FROM symbols WHERE name=? AND file_path=? LIMIT 1",
+                        (caller_sym.name, file_path),
+                    ).fetchone()
+                    if row:
+                        rows.append((row["id"], callee_name, call_line))
+                if rows:
+                    self.conn.executemany(
+                        "INSERT INTO symbol_calls (caller_id, callee_name, call_line) VALUES (?,?,?)",
+                        rows,
+                    )
+
+    def get_callers(self, callee_name: str) -> list[dict]:
+        rows = self.conn.execute("""
+            SELECT s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
+                   s.signature, s.language, sc.call_line
+            FROM symbol_calls sc
+            JOIN symbols s ON sc.caller_id = s.id
+            WHERE sc.callee_name = ?
+            ORDER BY s.file_path, sc.call_line
+        """, (callee_name,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_callees(self, caller_name: str) -> list[dict]:
+        rows = self.conn.execute("""
+            SELECT sc.callee_name, sc.call_line,
+                   s.id AS caller_id, s.file_path, s.language
+            FROM symbol_calls sc
+            JOIN symbols s ON sc.caller_id = s.id
+            WHERE s.name = ?
+            ORDER BY sc.call_line
+        """, (caller_name,)).fetchall()
+        return [dict(r) for r in rows]
 
     def _replace_file_symbols(
         self,
@@ -254,6 +324,11 @@ class Database:
         file_size: Optional[int],
         mtime_ns: Optional[int],
     ) -> None:
+        self.conn.execute(
+            "DELETE FROM symbol_calls WHERE caller_id IN "
+            "(SELECT id FROM symbols WHERE file_path=?)",
+            (file_path,),
+        )
         self.conn.execute(
             "DELETE FROM vec_symbols WHERE symbol_id IN "
             "(SELECT id FROM symbols WHERE file_path=?)",
@@ -310,6 +385,11 @@ class Database:
     def delete_symbols_for_file(self, file_path: str) -> None:
         with self._lock:
             with self.conn:
+                self.conn.execute(
+                    "DELETE FROM symbol_calls WHERE caller_id IN "
+                    "(SELECT id FROM symbols WHERE file_path = ?)",
+                    (file_path,),
+                )
                 self.conn.execute(
                     "DELETE FROM vec_symbols WHERE symbol_id IN "
                     "(SELECT id FROM symbols WHERE file_path = ?)",
