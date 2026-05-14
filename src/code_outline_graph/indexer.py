@@ -95,20 +95,40 @@ def _gitignore_matcher(project_path: str):
 def iter_indexable_files(project_path: str, on_skip=None):
     """Yield supported, non-ignored files with cached stat metadata."""
     matches = _gitignore_matcher(project_path)
+    # Cache ignored directory paths so children are pruned without re-checking.
+    _ignored_dirs: set[str] = set()
+
     for root, dirs, files in os.walk(project_path):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _SKIP_DIRS]
+        # Prune dirs: skip dotfiles, known noisy dirs, and gitignored dirs.
+        # Propagate parent ignore state so we never descend into ignored subtrees.
+        clean = []
+        for d in dirs:
+            if d.startswith(".") or d in _SKIP_DIRS:
+                continue
+            d_full = os.path.join(root, d)
+            if root in _ignored_dirs or matches(d_full):
+                _ignored_dirs.add(d_full)
+                continue
+            clean.append(d)
+        dirs[:] = clean
+
+        if root in _ignored_dirs:
+            continue
+
         for fname in files:
-            full = os.path.join(root, fname)
             if fname in _SECRET_FILES:
                 if on_skip is not None:
-                    on_skip(full, "secret file")
+                    on_skip(os.path.join(root, fname), "secret file")
+                continue
+            # detect_language is a cheap dict lookup — do it before the
+            # expensive gitignore match to skip unsupported files fast.
+            full = os.path.join(root, fname)
+            language = detect_language(full)
+            if not language:
                 continue
             if matches(full):
                 if on_skip is not None:
                     on_skip(full, "gitignored")
-                continue
-            language = detect_language(full)
-            if not language:
                 continue
             try:
                 size, mtime_ns = file_metadata(full)
