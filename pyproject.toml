@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-outline-graph"
-version = "0.2.41"
+version = "0.2.42"
 requires-python = ">=3.11"
 description = "Symbol-level code indexer MCP server — token-efficient AI editing with confirm-before-read flow"
 readme = "README.md"
