@@ -318,6 +318,7 @@ class Indexer:
         background_large_files: bool | None = None,
     ) -> dict:
         """Walk project directory and index all supported files."""
+        _apply_worker_nice()  # nice main thread too for large repos
         stats = {"files": 0, "symbols": 0, "skipped": 0, "unchanged": 0, "errors": 0}
         should_embed = self.enable_embeddings if embed is None else embed
         should_background_large = (
@@ -325,6 +326,9 @@ class Indexer:
             if background_large_files is None
             else background_large_files
         )
+
+        # Preload all indexed file states in one query to avoid N per-file DB hits.
+        indexed_states: dict = self.db.load_all_indexed_file_states()
 
         # Phase 1: walk serially; skip callbacks stay on main thread.
         indexable: list[tuple[str, str, int, int]] = []
@@ -339,7 +343,8 @@ class Indexer:
         for item in iter_indexable_files(project_path, on_skip=_on_skip):
             _full, _language, size, _mtime_ns = item
             current_files.add(_full)
-            if self.is_file_current(_full, size, _mtime_ns):
+            stored = indexed_states.get(_full)
+            if stored is not None and stored.get("file_size") == size and stored.get("mtime_ns") == _mtime_ns:
                 stats["unchanged"] += 1
                 continue
             if size >= _LARGE_FILE_THRESHOLD:

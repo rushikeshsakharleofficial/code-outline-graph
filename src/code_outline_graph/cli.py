@@ -310,13 +310,6 @@ def cmd_build(args):
     print(f"[1/7] Indexing {path} ...")
     _db, indexer, db_path = _get_db_indexer(path)
 
-    # Fast pre-scan: count all files (upper bound) without calling detect_language
-    _SKIP_DIRS = {"node_modules", "__pycache__", ".git", "dist", "build", ".venv", "venv"}
-    _total = 0
-    for _r, _ds, _fs in os.walk(path):
-        _ds[:] = [d for d in _ds if not d.startswith(".") and d not in _SKIP_DIRS]
-        _total += len(_fs)
-
     _BAR_WIDTH = 20
     _term_width = max(40, shutil.get_terminal_size((120, 24)).columns - 1)
     _dir_stats = {}       # rel_dir -> {"files": int, "symbols": int}
@@ -330,17 +323,12 @@ def cmd_build(args):
 
     def _render_bar(file_path, live_stats):
         current = live_stats["files"]
-        pct = int(100 * current / _total) if _total > 0 else 100
-        filled = int(_BAR_WIDTH * pct / 100)
-        bar = "█" * filled + "░" * (_BAR_WIDTH - filled)
         basename = os.path.basename(file_path) if file_path else ""
         elapsed = _time.time() - _start_time
-        if current > 0 and _total > current and elapsed > 0:
-            eta_s = int(elapsed / current * (_total - current))
-            eta = f"{eta_s // 60}m {eta_s % 60}s" if eta_s >= 60 else f"{eta_s}s"
-        else:
-            eta = "--"
-        line = f"      [{bar}] {pct:3d}%  {current}/{_total}  {live_stats['symbols']} symbols  ETA {eta}  →  {basename}"
+        rate = f"{current / elapsed:.0f} files/s" if elapsed > 0 and current > 0 else "--"
+        # Spinner instead of percentage — no pre-scan total needed
+        spinner = "▏▎▍▌▋▊▉█▉▊▋▌▍▎"[current % 14]
+        line = f"      [{spinner}] {current} files  {live_stats['symbols']} symbols  {rate}  →  {basename}"
         line = line[:_term_width]
         sys.stderr.write(line.ljust(_term_width) + "\r")
         sys.stderr.flush()
@@ -377,10 +365,10 @@ def cmd_build(args):
         background_large_files=background_large_files,
     )
 
-    # Print final completed bar (100%, Done!)
+    # Print final completed bar (Done!)
     elapsed_index = _time.time() - _start_time
     bar = "█" * _BAR_WIDTH
-    final_line = f"      [{bar}] 100%  {stats['files']}/{_total}  {stats['symbols']} symbols  {elapsed_index:.1f}s  →  Done!"
+    final_line = f"      [{bar}] Done!  {stats['files']} files  {stats['symbols']} symbols  {elapsed_index:.1f}s"
     final_line = final_line[:_term_width]
     sys.stderr.write(final_line.ljust(_term_width) + "\n")
     sys.stderr.flush()

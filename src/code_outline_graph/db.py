@@ -404,6 +404,13 @@ class Database:
             checksum=row["checksum"],
         )
 
+    def load_all_indexed_file_states(self) -> dict:
+        """Load all indexed_files rows into a dict keyed by file_path. One query instead of N."""
+        rows = self.conn.execute(
+            "SELECT file_path, checksum, file_size, mtime_ns FROM indexed_files"
+        ).fetchall()
+        return {row["file_path"]: dict(row) for row in rows}
+
     def get_indexed_checksum(self, file_path: str) -> Optional[str]:
         row = self.conn.execute(
             "SELECT checksum FROM indexed_files WHERE file_path = ?",
