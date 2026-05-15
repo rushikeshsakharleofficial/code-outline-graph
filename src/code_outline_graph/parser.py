@@ -162,7 +162,8 @@ def _parse_sqlite_schema(file_path: str) -> list[Symbol]:
     import sqlite3 as _sqlite3
     symbols: list[Symbol] = []
     try:
-        conn = _sqlite3.connect(f"file:{file_path}?mode=ro", uri=True)
+        from urllib.parse import quote as _quote
+        conn = _sqlite3.connect(f"file:{_quote(file_path)}?mode=ro", uri=True)
         rows = conn.execute(
             "SELECT type, name, sql FROM sqlite_master "
             "WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' "
